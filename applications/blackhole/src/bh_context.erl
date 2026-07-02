@@ -19,6 +19,8 @@
 -export([setters/2
         ,auth_token/1, set_auth_token/2
         ,auth_account_id/1, set_auth_account_id/2
+        ,auth_user_id/1, set_auth_user_id/2
+        ,is_account_admin/1
         ,bindings/1, set_bindings/2
         ,client_bindings/1
         ,bindings_from_json/1
@@ -53,6 +55,7 @@
 
 -record(bh_context, {auth_token = <<>> :: kz_term:api_binary() | '_'
                     ,auth_account_id :: kz_term:api_binary() | '_'
+                    ,auth_user_id :: kz_term:api_binary() | '_'
                     ,bindings = [] :: bindings() | '_'
                     ,websocket_session_id :: kz_term:api_binary() | '_'
                     ,websocket_pid :: kz_term:api_pid() | '_'
@@ -173,6 +176,23 @@ auth_account_id(#bh_context{auth_account_id=AuthBy}) ->
 -spec set_auth_account_id(context(), kz_term:ne_binary()) -> context().
 set_auth_account_id(#bh_context{}=Context, AuthBy) ->
     Context#bh_context{auth_account_id=AuthBy}.
+
+-spec auth_user_id(context()) -> kz_term:api_ne_binary().
+auth_user_id(#bh_context{auth_user_id=UserId}) ->
+    UserId.
+
+-spec set_auth_user_id(context(), kz_term:api_ne_binary()) -> context().
+set_auth_user_id(#bh_context{}=Context, UserId) ->
+    Context#bh_context{auth_user_id=UserId}.
+
+%% Account admin == the connected user's priv_level is "admin".
+-spec is_account_admin(context()) -> boolean().
+is_account_admin(#bh_context{auth_account_id='undefined'}) ->
+    'false';
+is_account_admin(#bh_context{auth_user_id='undefined'}) ->
+    'false';
+is_account_admin(#bh_context{auth_account_id=AccountId, auth_user_id=UserId}) ->
+    kzd_user:is_account_admin(AccountId, UserId).
 
 -spec is_superduper_admin(context()) -> boolean().
 is_superduper_admin(#bh_context{auth_account_id=AccountId}) ->

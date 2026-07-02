@@ -52,7 +52,11 @@ auth_token(Context, Token)
         {'ok', JObj} ->
             lager:info("token auth is valid, authenticating : ~p", [JObj]),
             AccountId = kz_json:get_ne_value(<<"account_id">>, JObj),
-            bh_context:set_auth_account_id(Context, AccountId);
+            OwnerId = kz_json:get_ne_value(<<"owner_id">>, JObj),
+            bh_context:set_auth_user_id(
+              bh_context:set_auth_account_id(Context, AccountId)
+                                        ,OwnerId
+             );
         {'error', R} ->
             lager:debug("failed to authenticate token auth, ~p", [R]),
             bh_context:add_error(Context, <<"failed to authenticate token">>)
