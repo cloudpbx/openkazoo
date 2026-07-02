@@ -14,6 +14,7 @@
 -module(cb_cdrs).
 
 -export([init/0
+        ,authorize/1, authorize/2, authorize/3
         ,allowed_methods/0, allowed_methods/1, allowed_methods/2
         ,resource_exists/0, resource_exists/1, resource_exists/2
         ,content_types_provided/1, content_types_provided/2, content_types_provided/3
@@ -119,7 +120,41 @@ init() ->
     _ = crossbar_bindings:bind(<<"*.to_json.get.cdrs">>, ?MODULE, 'to_json'),
     _ = crossbar_bindings:bind(<<"*.to_csv.get.cdrs">>, ?MODULE, 'to_csv'),
     _ = crossbar_bindings:bind(<<"*.validate.cdrs">>, ?MODULE, 'validate'),
+    _ = crossbar_bindings:bind(<<"*.authorize.cdrs">>, ?MODULE, 'authorize'),
     'ok'.
+
+-spec authorize(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
+authorize(Context) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize(cb_context:context(), path_token()) -> boolean() | {'stop', cb_context:context()}.
+authorize(Context, _PathToken) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize(cb_context:context(), path_token(), path_token()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize(Context, _, _) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+%% Apply owner gating only to collection endpoints; specific records and legs
+%% defer here and are enforced in validate (load_cdr / load_legs).
+-spec authorize_nouns(cb_context:context(), req_nouns()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize_nouns(Context, [{<<"cdrs">>, []}|_]) ->
+    crossbar_owner_authz:authorize_collection(Context);
+authorize_nouns(Context, [{<<"cdrs">>, [?PATH_INTERACTION]}|_]) ->
+    crossbar_owner_authz:authorize_collection(Context);
+authorize_nouns(Context, [{<<"cdrs">>, [?PATH_SUMMARY]}|_]) ->
+    %% The summary endpoint is an account-wide reduce aggregate with no
+    %% owner-scoped view, so it cannot be safely filtered. Deny for
+    %% restricted (owner-enforced) users in both filter and reject modes;
+    %% admins / flag-off are unaffected.
+    case crossbar_owner_authz:is_enforced(Context) of
+        'true' -> {'stop', cb_context:add_system_error('forbidden', Context)};
+        'false' -> 'false'
+    end;
+authorize_nouns(_Context, _Nouns) ->
+    'false'.
 
 -spec to_json(cb_cowboy_payload()) -> cb_cowboy_payload().
 to_json({Req, Context}) ->
@@ -223,7 +258,7 @@ validate(Context, ?PATH_INTERACTION) ->
 validate(Context, ?PATH_SUMMARY) ->
     load_cdr_summary(Context);
 validate(Context, CDRId) ->
-    load_cdr(CDRId, Context).
+    authorize_loaded_cdr(load_cdr(CDRId, Context)).
 
 -spec validate(cb_context:context(), path_token(), path_token()) -> cb_context:context().
 validate(Context, ?PATH_LEGS, InteractionId) ->
@@ -254,7 +289,7 @@ validate_utc_offset(Context, UTCSecondsOffset) ->
 
 -spec validate_chunk_view(cb_context:context()) -> cb_context:context().
 validate_chunk_view(Context) ->
-    case get_view_options(cb_context:req_nouns(Context)) of
+    case get_view_options(crossbar_owner_authz:maybe_scope_nouns(Context, cb_context:req_nouns(Context))) of
         {'undefined', []} ->
             lager:debug("invalid URL chain for cdrs request"),
             cb_context:add_system_error('faulty_request', Context);
@@ -649,6 +684,16 @@ load_cdr(CDRId, Context) ->
     lager:debug("error loading cdr by id ~p", [CDRId]),
     crossbar_util:response('error', <<"could not find cdr with supplied id">>, 404, Context).
 
+-spec authorize_loaded_cdr(cb_context:context()) -> cb_context:context().
+authorize_loaded_cdr(Context) ->
+    case cb_context:resp_status(Context) of
+        'success' ->
+            OwnerId = crossbar_owner_authz:doc_owner_id(cb_context:doc(Context)),
+            crossbar_owner_authz:authorize_doc(Context, OwnerId);
+        _Other ->
+            Context
+    end.
+
 %%------------------------------------------------------------------------------
 %% @doc Load Legs for a cdr interaction from the database
 %% @end
@@ -676,7 +721,7 @@ load_legs(<<BinTimestamp:11/binary, "-", _Key/binary>>=InteractionId, Context) -
               ,{'databases', [MODB]}
               ,'include_docs'
               ],
-    crossbar_view:load_modb(Context, ?CB_INTERACTION_LIST_BY_ID, Options);
+    maybe_filter_legs(crossbar_view:load_modb(Context, ?CB_INTERACTION_LIST_BY_ID, Options));
 load_legs(Id, Context) ->
     crossbar_util:response_bad_identifier(Id, Context).
 
@@ -684,3 +729,18 @@ load_legs(Id, Context) ->
           kz_json:objects().
 normalize_leg_view_results(JObj, Acc) ->
     Acc ++ [kz_json:get_json_value(<<"doc">>, JObj)].
+
+%% Restrict an interaction's legs to those the requesting user owns, so a
+%% regular user sees only their own leg(s) and not the bridged legs of others.
+%% Relies on load_legs using 'include_docs' so each leg JObj carries owner_id;
+%% without it, filter_owned would treat every leg as unowned.
+-spec maybe_filter_legs(cb_context:context()) -> cb_context:context().
+maybe_filter_legs(Context) ->
+    case cb_context:resp_status(Context) of
+        'success' ->
+            cb_context:set_resp_data(Context
+                                    ,crossbar_owner_authz:filter_owned(Context, cb_context:resp_data(Context))
+                                    );
+        _Other ->
+            Context
+    end.
