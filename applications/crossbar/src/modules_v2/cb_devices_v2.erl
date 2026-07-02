@@ -119,14 +119,16 @@ authenticate(?HTTP_GET, ?DEVICES_QCALL_NOUNS(_DeviceId, _Number)) ->
 authenticate(_Verb, _Nouns) ->
     'false'.
 
--spec authorize(cb_context:context()) -> boolean().
+-spec authorize(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
 authorize(Context) ->
-    authorize(cb_context:req_verb(Context), cb_context:req_nouns(Context)).
+    authorize(Context, cb_context:req_verb(Context), cb_context:req_nouns(Context)).
 
-authorize(?HTTP_GET, ?DEVICES_QCALL_NOUNS(_DeviceId, _Number)) ->
+authorize(_Context, ?HTTP_GET, ?DEVICES_QCALL_NOUNS(_DeviceId, _Number)) ->
     lager:debug("authorizing request"),
     'true';
-authorize(_Verb, _Nouns) ->
+authorize(Context, _Verb, [{<<"devices">>, []} | _]) ->
+    crossbar_owner_authz:authorize_collection(Context);
+authorize(_Context, _Verb, _Nouns) ->
     'false'.
 
 %%------------------------------------------------------------------------------
@@ -184,22 +186,26 @@ validate(Context, PathToken) ->
 validate_device(Context, ?STATUS_PATH_TOKEN, ?HTTP_GET) ->
     load_device_status(Context);
 validate_device(Context, DeviceId, ?HTTP_GET) ->
-    load_device(DeviceId, Context);
+    authorize_loaded_device(load_device(DeviceId, Context));
 validate_device(Context, DeviceId, ?HTTP_POST) ->
-    validate_device(DeviceId, load_device(DeviceId, Context));
+    validate_device(DeviceId, authorize_loaded_device(load_device(DeviceId, Context)));
 validate_device(Context, DeviceId, ?HTTP_PATCH) ->
-    validate_patch(Context, DeviceId);
+    Context1 = authorize_loaded_device(load_device(DeviceId, Context)),
+    case cb_context:resp_status(Context1) of
+        'success' -> validate_patch(Context, DeviceId);
+        _Error -> Context1
+    end;
 validate_device(Context, DeviceId, ?HTTP_PUT) ->
     validate_action(Context, DeviceId, cb_context:req_value(Context, <<"action">>));
 validate_device(Context, DeviceId, ?HTTP_DELETE) ->
-    load_device(DeviceId, Context).
+    authorize_loaded_device(load_device(DeviceId, Context)).
 
 validate_patch(Context, DeviceId) ->
     crossbar_doc:patch_and_validate(DeviceId, Context, fun validate_device/2).
 
 -spec validate(cb_context:context(), path_token(), path_token()) -> cb_context:context().
 validate(Context, DeviceId, ?CHECK_SYNC_PATH_TOKEN) ->
-    load_device(DeviceId, Context).
+    authorize_loaded_device(load_device(DeviceId, Context)).
 
 -spec post(cb_context:context(), path_token()) -> cb_context:context().
 post(Context, DeviceId) ->
@@ -249,7 +255,8 @@ delete(Context, DeviceId) ->
 -spec load_device_summary(cb_context:context()) ->
           cb_context:context().
 load_device_summary(Context) ->
-    load_device_summary(Context, cb_context:req_nouns(Context)).
+    load_device_summary(Context
+                       ,crossbar_owner_authz:maybe_scope_nouns(Context, cb_context:req_nouns(Context))).
 
 -spec load_device_summary(cb_context:context(), req_nouns()) ->
           cb_context:context().
@@ -298,7 +305,7 @@ validate_device(DeviceId, Context) ->
 validate_action(Context, DeviceId, <<"notify">>) ->
     Context1 = cb_context:validate_request_data(<<"devices_notify">>, Context),
     case cb_context:resp_status(Context1) of
-        'success' -> load_device(DeviceId, Context);
+        'success' -> authorize_loaded_device(load_device(DeviceId, Context));
         _ -> Context1
     end;
 validate_action(Context, _, 'undefined') ->
@@ -314,6 +321,16 @@ validate_action(Context, _, _) ->
 load_device(DeviceId, Context) ->
     crossbar_doc:load(DeviceId, Context, ?TYPE_CHECK_OPTION(kzd_devices:type())).
 
+-spec authorize_loaded_device(cb_context:context()) -> cb_context:context().
+authorize_loaded_device(Context) ->
+    case cb_context:resp_status(Context) of
+        'success' ->
+            OwnerId = crossbar_owner_authz:doc_owner_id(cb_context:doc(Context)),
+            crossbar_owner_authz:authorize_doc(Context, OwnerId);
+        _Other ->
+            Context
+    end.
+
 %%------------------------------------------------------------------------------
 %% @doc Retrieve the status of the devices linked to the account/
 %% Reads registered devices in registrations, then map to devices of the account/
@@ -324,7 +341,30 @@ load_device_status(Context) ->
     AccountRealm = kzd_accounts:fetch_realm(cb_context:account_id(Context)),
     RegStatuses = lookup_regs(AccountRealm),
     lager:debug("reg statuses: ~p", [RegStatuses]),
-    crossbar_util:response(RegStatuses, Context).
+    crossbar_util:response(maybe_scope_device_status(Context, RegStatuses), Context).
+
+-spec maybe_scope_device_status(cb_context:context(), kz_json:objects()) -> kz_json:objects().
+maybe_scope_device_status(Context, RegStatuses) ->
+    case crossbar_owner_authz:is_enforced(Context) of
+        'false' -> RegStatuses;
+        'true' ->
+            OwnedIds = owned_device_ids(Context),
+            [Status
+             || Status <- RegStatuses,
+                sets:is_element(kz_json:get_ne_binary_value(<<"device_id">>, Status), OwnedIds)
+            ]
+    end.
+
+-spec owned_device_ids(cb_context:context()) -> sets:set().
+owned_device_ids(Context) ->
+    AccountDb = cb_context:account_db(Context),
+    AuthUserId = cb_context:auth_user_id(Context),
+    case kz_datamgr:get_results(AccountDb, ?OWNER_LIST, [{'key', AuthUserId}]) of
+        {'ok', JObjs} -> sets:from_list([kz_doc:id(JObj) || JObj <- JObjs]);
+        {'error', _R} ->
+            lager:warning("failed to load owned device ids for ~s: ~p", [AuthUserId, _R]),
+            sets:new()
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc Normalizes the results of a view.
