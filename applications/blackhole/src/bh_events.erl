@@ -114,6 +114,21 @@ unsubscribe(Context, Payload) ->
     end.
 
 -spec event(map(), kz_term:ne_binary(), kz_json:object()) -> 'ok'.
+event(#{owner_enforced := 'true', auth_user_id := AuthUserId}=Binding, RK, EventJObj) ->
+    kz_util:put_callid(EventJObj),
+    Name = kz_api:event_name(EventJObj),
+    NormJObj = kz_json:normalize_jobj(
+                 kz_api:public_fields(EventJObj)
+                ),
+    case bh_owner_authz:event_owner_id(NormJObj) =:= AuthUserId of
+        'true' ->
+            blackhole_data_emitter:event(Binding, RK, Name, NormJObj);
+        'false' ->
+            lager:debug("filtered event ~s for session ~s (owner mismatch)"
+                       ,[Name, maps:get('session_id', Binding, <<>>)]
+                       ),
+            'ok'
+    end;
 event(Binding, RK, EventJObj) ->
     kz_util:put_callid(EventJObj),
     Name = kz_api:event_name(EventJObj),
@@ -154,6 +169,8 @@ bh_binding(Context, {ClientBinding, AMQPBinding}) ->
                 ,subscription_key => AMQPBinding
                 ,session_pid => SessionPid
                 ,session_id => SessionId
+                ,owner_enforced => bh_owner_authz:is_enforced(Context)
+                ,auth_user_id => bh_context:auth_user_id(Context)
                 },
     BHBinding = <<"blackhole.event.", AMQPBinding/binary>>,
     blackhole_bindings:bind(BHBinding, ?MODULE, 'event', Binding).

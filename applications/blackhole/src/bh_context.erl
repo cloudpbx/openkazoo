@@ -385,9 +385,13 @@ remove_listeners(#bh_context{listeners=BListeners}=Context, Listeners) ->
 listeners(#bh_context{listeners=BListeners}) ->
     BListeners.
 
--spec success(context()) -> boolean().
+-spec success(context() | any()) -> boolean().
 success(#bh_context{errors=[]}) -> 'true';
-success(#bh_context{}) -> 'false'.
+success(#bh_context{}) -> 'false';
+%% Fail closed: any non-context routine result (e.g. an unexpected value from a
+%% caught exception in the authorize fold) is treated as failure rather than
+%% crashing the socket handler with a function_clause.
+success(_) -> 'false'.
 
 -spec set_resp_data(context(), kz_json:object()) -> context().
 set_resp_data(#bh_context{}=Context, Data) ->
