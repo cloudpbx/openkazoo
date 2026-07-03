@@ -12,6 +12,7 @@
 -module(cb_vmboxes).
 
 -export([init/0
+        ,authorize/1, authorize/2, authorize/3, authorize/4, authorize/5
         ,allowed_methods/0, allowed_methods/1, allowed_methods/2, allowed_methods/3, allowed_methods/4
         ,resource_exists/0, resource_exists/1, resource_exists/2, resource_exists/3, resource_exists/4
         ,validate/1, validate/2, validate/3, validate/4, validate/5
@@ -69,8 +70,76 @@ init() ->
     _ = crossbar_bindings:bind(<<"*.execute.post.vmboxes">>, ?MODULE, 'post'),
     _ = crossbar_bindings:bind(<<"*.execute.patch.vmboxes">>, ?MODULE, 'patch'),
     _ = crossbar_bindings:bind(<<"*.execute.delete.vmboxes">>, ?MODULE, 'delete'),
+    _ = crossbar_bindings:bind(<<"*.authorize.vmboxes">>, ?MODULE, 'authorize'),
 
     sync_config_to_schema().
+
+%%------------------------------------------------------------------------------
+%% @doc Owner gating: the account-wide collection (and the account-wide
+%% messages listing) is rejected (reject mode) or scoped to the caller (filter
+%% mode, see load_vmbox_summary); a specific voicemail box and all of its
+%% sub-resources (messages, media, raw audio) are accessible only when the box
+%% belongs to the authenticated user. Enforced at authorize time so it covers
+%% every verb and every nested message/media path. Admins / flag-off defer to
+%% the normal account-hierarchy gate.
+%% @end
+%%------------------------------------------------------------------------------
+-spec authorize(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
+authorize(Context) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize(cb_context:context(), path_token()) -> boolean() | {'stop', cb_context:context()}.
+authorize(Context, _) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize(cb_context:context(), path_token(), path_token()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize(Context, _, _) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize(cb_context:context(), path_token(), path_token(), path_token()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize(Context, _, _, _) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize(cb_context:context(), path_token(), path_token(), path_token(), path_token()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize(Context, _, _, _, _) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize_nouns(cb_context:context(), req_nouns()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize_nouns(Context, [{<<"vmboxes">>, []}|_]) ->
+    crossbar_owner_authz:authorize_collection(Context);
+authorize_nouns(Context, [{<<"vmboxes">>, [?MESSAGES_RESOURCE]}|_]) ->
+    crossbar_owner_authz:authorize_collection(Context);
+authorize_nouns(Context, [{<<"vmboxes">>, [BoxId|_]}|_]) ->
+    authorize_box(Context, BoxId);
+authorize_nouns(_Context, _Nouns) ->
+    'false'.
+
+%% A restricted (non-admin) session may act on a specific voicemail box (and
+%% its messages/media) only if the box's owner_id is the authenticated user.
+-spec authorize_box(cb_context:context(), kz_term:ne_binary()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize_box(Context, BoxId) ->
+    case crossbar_owner_authz:is_enforced(Context) of
+        'false' -> 'false';
+        'true' -> authorize_box_enforced(Context, BoxId)
+    end.
+
+-spec authorize_box_enforced(cb_context:context(), kz_term:ne_binary()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize_box_enforced(Context, BoxId) ->
+    case kz_datamgr:open_cache_doc(cb_context:account_db(Context), BoxId) of
+        {'ok', Doc} ->
+            case crossbar_owner_authz:doc_owner_id(Doc) =:= cb_context:auth_user_id(Context) of
+                'true' -> 'false';
+                'false' -> {'stop', cb_context:add_system_error('forbidden', Context)}
+            end;
+        _Error ->
+            'false'
+    end.
 
 -spec sync_config_to_schema() -> 'ok'.
 sync_config_to_schema() ->
@@ -792,8 +861,18 @@ validate_patch(Context, BoxId)->
 load_vmbox_summary(Context) ->
     Context1 = crossbar_doc:load_view(?CB_LIST, [], Context, fun normalize_view_results/2),
     CountMap = kvm_messages:count(cb_context:account_id(Context)),
-    RspData = add_counts_to_summary_results(cb_context:doc(Context1), CountMap),
+    RspData = maybe_scope_vmbox_summary(Context, add_counts_to_summary_results(cb_context:doc(Context1), CountMap)),
     cb_context:set_resp_data(cb_context:set_doc(Context1, RspData), RspData).
+
+%% In filter mode, reduce the account-wide box listing to the caller's own
+%% boxes (each summary row carries owner_id). Reject mode never reaches here
+%% (denied in authorize). Admins / flag-off are unaffected.
+-spec maybe_scope_vmbox_summary(cb_context:context(), kz_json:objects()) -> kz_json:objects().
+maybe_scope_vmbox_summary(Context, RspData) ->
+    case crossbar_owner_authz:scope_owner_id(Context) of
+        'undefined' -> RspData;
+        _OwnerId -> crossbar_owner_authz:filter_owned(Context, RspData)
+    end.
 
 -spec normalize_view_results(kz_json:object(), kz_json:objects()) -> kz_json:objects().
 normalize_view_results(JObj, Acc) ->
