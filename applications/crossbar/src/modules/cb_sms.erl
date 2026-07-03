@@ -12,6 +12,7 @@
 -module(cb_sms).
 
 -export([init/0
+        ,authorize/1, authorize/2
         ,allowed_methods/0, allowed_methods/1
         ,resource_exists/0, resource_exists/1
         ,validate/1, validate/2
@@ -41,8 +42,30 @@ init() ->
     _ = crossbar_bindings:bind(<<"*.allowed_methods.sms">>, ?MODULE, 'allowed_methods'),
     _ = crossbar_bindings:bind(<<"*.resource_exists.sms">>, ?MODULE, 'resource_exists'),
     _ = crossbar_bindings:bind(<<"*.validate.sms">>, ?MODULE, 'validate'),
+    _ = crossbar_bindings:bind(<<"*.authorize.sms">>, ?MODULE, 'authorize'),
     _ = crossbar_bindings:bind(<<"*.execute.put.sms">>, ?MODULE, 'put'),
     crossbar_bindings:bind(<<"*.execute.delete.sms">>, ?MODULE, 'delete').
+
+%%------------------------------------------------------------------------------
+%% @doc Owner gating: the account-wide collection is rejected (reject mode) or
+%% deferred and scoped by owner (filter mode, see summary); a specific message
+%% is authorized against its owner_id after load. Admins / flag-off defer.
+%% @end
+%%------------------------------------------------------------------------------
+-spec authorize(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
+authorize(Context) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize(cb_context:context(), path_token()) -> boolean() | {'stop', cb_context:context()}.
+authorize(Context, _Id) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize_nouns(cb_context:context(), req_nouns()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize_nouns(Context, [{<<"sms">>, []}|_]) ->
+    crossbar_owner_authz:authorize_collection(Context);
+authorize_nouns(_Context, _Nouns) ->
+    'false'.
 
 %%------------------------------------------------------------------------------
 %% @doc Given the path tokens related to this module, what HTTP methods are
@@ -101,9 +124,21 @@ validate_request(Context, ?HTTP_PUT) ->
 
 -spec validate_sms(cb_context:context(), path_token(), http_method()) -> cb_context:context().
 validate_sms(Context, Id, ?HTTP_GET) ->
-    read(Id, Context);
+    authorize_loaded_message(read(Id, Context));
 validate_sms(Context, Id, ?HTTP_DELETE) ->
-    read(Id, Context).
+    authorize_loaded_message(read(Id, Context)).
+
+%% Enforce owner ownership on a loaded message (owner_id lives on the doc or
+%% under custom_channel_vars). No-op unless the owner policy is enforced.
+-spec authorize_loaded_message(cb_context:context()) -> cb_context:context().
+authorize_loaded_message(Context) ->
+    case cb_context:resp_status(Context) of
+        'success' ->
+            OwnerId = crossbar_owner_authz:doc_owner_id(cb_context:doc(Context)),
+            crossbar_owner_authz:authorize_doc(Context, OwnerId);
+        _Other ->
+            Context
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc If the HTTP verb is PUT, execute the actual action, usually a db save.
@@ -330,12 +365,22 @@ number_has_sms_enabled(Context) ->
 %%------------------------------------------------------------------------------
 -spec summary(cb_context:context()) -> cb_context:context().
 summary(Context) ->
-    {ViewName, Opts} =
-        build_view_name_range_keys(cb_context:device_id(Context), cb_context:user_id(Context)),
+    {ViewName, Opts} = summary_view_keys(Context),
     Options = [{'mapper', fun normalize_view_results/2}
                | Opts
               ],
     crossbar_view:load_modb(Context, ViewName, Options).
+
+%% In filter mode, force the owner-scoped view keyed to the caller (ignoring any
+%% device scope in the URL); otherwise use the device/user the URL implied.
+-spec summary_view_keys(cb_context:context()) -> {kz_term:ne_binary(), crossbar_view:options()}.
+summary_view_keys(Context) ->
+    case crossbar_owner_authz:scope_owner_id(Context) of
+        'undefined' ->
+            build_view_name_range_keys(cb_context:device_id(Context), cb_context:user_id(Context));
+        OwnerId ->
+            build_view_name_range_keys('undefined', OwnerId)
+    end.
 
 -spec build_view_name_range_keys(kz_term:api_binary(), kz_term:api_binary()) -> {kz_term:ne_binary(), crossbar_view:options()}.
 build_view_name_range_keys('undefined', 'undefined') ->
