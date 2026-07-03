@@ -8,6 +8,7 @@
 -module(cb_groups).
 
 -export([init/0
+        ,authorize/1, authorize/2
         ,allowed_methods/0, allowed_methods/1
         ,resource_exists/0, resource_exists/1
         ,validate/1, validate/2
@@ -38,7 +39,58 @@ init() ->
     _ = crossbar_bindings:bind(<<"*.execute.put.groups">>, ?MODULE, 'put'),
     _ = crossbar_bindings:bind(<<"*.execute.post.groups">>, ?MODULE, 'post'),
     _ = crossbar_bindings:bind(<<"*.execute.patch.groups">>, ?MODULE, 'patch'),
+    _ = crossbar_bindings:bind(<<"*.authorize.groups">>, ?MODULE, 'authorize'),
     crossbar_bindings:bind(<<"*.execute.delete.groups">>, ?MODULE, 'delete').
+
+%%------------------------------------------------------------------------------
+%% @doc Owner gating (membership-based, since a group is shared, not owned by a
+%% single user): the account-wide collection is rejected (reject mode) or
+%% scoped to the caller's groups (filter mode, see summary); a specific group
+%% is accessible only if the caller is one of its endpoints. Admins / flag-off
+%% defer to the normal account-hierarchy gate.
+%% @end
+%%------------------------------------------------------------------------------
+-spec authorize(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
+authorize(Context) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize(cb_context:context(), path_token()) -> boolean() | {'stop', cb_context:context()}.
+authorize(Context, _Id) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize_nouns(cb_context:context(), req_nouns()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize_nouns(Context, [{<<"groups">>, []}|_]) ->
+    crossbar_owner_authz:authorize_collection(Context);
+authorize_nouns(Context, [{<<"groups">>, [GroupId|_]}|_]) ->
+    authorize_group_member(Context, GroupId);
+authorize_nouns(_Context, _Nouns) ->
+    'false'.
+
+%% A restricted (non-admin) session may act on a specific group only if the
+%% authenticated user is one of the group's endpoints. Covers all verbs since
+%% it runs at authorize time, before validate.
+-spec authorize_group_member(cb_context:context(), kz_term:ne_binary()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize_group_member(Context, GroupId) ->
+    case crossbar_owner_authz:is_enforced(Context) of
+        'false' -> 'false';
+        'true' -> authorize_group_member_enforced(Context, GroupId)
+    end.
+
+-spec authorize_group_member_enforced(cb_context:context(), kz_term:ne_binary()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize_group_member_enforced(Context, GroupId) ->
+    case kz_datamgr:open_cache_doc(cb_context:account_db(Context), GroupId) of
+        {'ok', Doc} ->
+            Endpoints = kz_json:get_json_value(<<"endpoints">>, Doc, kz_json:new()),
+            case kz_json:get_value(cb_context:auth_user_id(Context), Endpoints) of
+                'undefined' -> {'stop', cb_context:add_system_error('forbidden', Context)};
+                _Member -> 'false'
+            end;
+        _Error ->
+            'false'
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc Given the path tokens related to this module, what HTTP methods are
@@ -180,9 +232,18 @@ validate_patch(Id, Context) ->
 %%------------------------------------------------------------------------------
 -spec summary(cb_context:context()) -> cb_context:context().
 summary(Context) ->
-    case cb_context:user_id(Context) of
+    case summary_user_id(Context) of
         'undefined' -> crossbar_doc:load_view(?CB_LIST, [], Context, fun normalize_view_results/2);
         UserId -> crossbar_doc:load_view(?CB_LIST_BY_USER, [{'key', UserId}], Context, fun normalize_view_results/2)
+    end.
+
+%% In filter mode, force the caller's own membership listing (groups the user
+%% belongs to); otherwise use whatever the URL implied.
+-spec summary_user_id(cb_context:context()) -> kz_term:api_ne_binary().
+summary_user_id(Context) ->
+    case crossbar_owner_authz:scope_owner_id(Context) of
+        'undefined' -> cb_context:user_id(Context);
+        OwnerId -> OwnerId
     end.
 
 %%------------------------------------------------------------------------------
