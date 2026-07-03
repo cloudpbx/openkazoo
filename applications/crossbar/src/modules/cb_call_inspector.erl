@@ -8,6 +8,7 @@
 -module(cb_call_inspector).
 
 -export([init/0
+        ,authorize/1, authorize/2
         ,allowed_methods/0, allowed_methods/1
         ,resource_exists/0, resource_exists/1
         ,validate/1, validate/2
@@ -37,7 +38,36 @@ init() ->
     _ = crossbar_bindings:bind(<<"*.resource_exists.call_inspector">>, ?MODULE, 'resource_exists'),
     _ = crossbar_bindings:bind(<<"*.to_json.get.call_inspector">>, ?MODULE, 'to_json'),
     _ = crossbar_bindings:bind(<<"*.to_csv.get.call_inspector">>, ?MODULE, 'to_csv'),
-    crossbar_bindings:bind(<<"*.validate.call_inspector">>, ?MODULE, 'validate').
+    _ = crossbar_bindings:bind(<<"*.validate.call_inspector">>, ?MODULE, 'validate'),
+    crossbar_bindings:bind(<<"*.authorize.call_inspector">>, ?MODULE, 'authorize').
+
+%%------------------------------------------------------------------------------
+%% @doc Owner gating: the account-wide collection is rejected (reject mode) or
+%% deferred and scoped by owner (filter mode, see validate/1). Per-call
+%% inspection exposes raw SIP dialog and cannot be cheaply tied to an owner, so
+%% it is denied for owner-restricted sessions in both modes. Admins / flag-off
+%% defer to the normal account-hierarchy gate.
+%% @end
+%%------------------------------------------------------------------------------
+-spec authorize(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
+authorize(Context) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize(cb_context:context(), path_token()) -> boolean() | {'stop', cb_context:context()}.
+authorize(Context, _CallId) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize_nouns(cb_context:context(), req_nouns()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize_nouns(Context, [{<<"call_inspector">>, []}|_]) ->
+    crossbar_owner_authz:authorize_collection(Context);
+authorize_nouns(Context, [{<<"call_inspector">>, [_CallId]}|_]) ->
+    case crossbar_owner_authz:is_enforced(Context) of
+        'true' -> {'stop', cb_context:add_system_error('forbidden', Context)};
+        'false' -> 'false'
+    end;
+authorize_nouns(_Context, _Nouns) ->
+    'false'.
 
 %%------------------------------------------------------------------------------
 %% @doc Given the path tokens related to this module, what HTTP methods are
@@ -77,7 +107,7 @@ resource_exists(_) -> 'true'.
 %%------------------------------------------------------------------------------
 -spec validate(cb_context:context()) -> cb_context:context().
 validate(Context) ->
-    case get_view_options(cb_context:req_nouns(Context)) of
+    case get_view_options(crossbar_owner_authz:maybe_scope_nouns(Context, cb_context:req_nouns(Context))) of
         {'undefined', []} ->
             lager:debug("invalid URL chain for cdrs request"),
             cb_context:add_system_error('faulty_request', Context);
