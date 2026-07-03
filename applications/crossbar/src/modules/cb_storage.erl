@@ -69,17 +69,30 @@ init() ->
 %% allowed to access the resource, or false if not.
 %% @end
 %%------------------------------------------------------------------------------
--spec authorize(cb_context:context()) -> boolean().
+-spec authorize(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
 authorize(Context) ->
-    do_authorize(set_scope(Context)).
+    maybe_deny_owner(Context, do_authorize(set_scope(Context))).
 
--spec authorize(cb_context:context(), path_token()) -> boolean().
+-spec authorize(cb_context:context(), path_token()) -> boolean() | {'stop', cb_context:context()}.
 authorize(Context, ?PLANS_TOKEN) ->
-    do_authorize(set_scope(Context)).
+    maybe_deny_owner(Context, do_authorize(set_scope(Context))).
 
--spec authorize(cb_context:context(), path_token(), path_token()) -> boolean().
+-spec authorize(cb_context:context(), path_token(), path_token()) ->
+          boolean() | {'stop', cb_context:context()}.
 authorize(Context, ?PLANS_TOKEN, _PlanId) ->
-    do_authorize(set_scope(Context)).
+    maybe_deny_owner(Context, do_authorize(set_scope(Context))).
+
+%% Storage plans are account/system configuration (they expose the backing
+%% store's credentials); there is no per-owner storage. Deny outright for an
+%% owner-restricted (non-admin) session rather than deferring, in both filter
+%% and reject modes. Admins / flag-off keep the stock behaviour.
+-spec maybe_deny_owner(cb_context:context(), boolean() | {'stop', cb_context:context()}) ->
+          boolean() | {'stop', cb_context:context()}.
+maybe_deny_owner(Context, Result) ->
+    case crossbar_owner_authz:is_enforced(Context) of
+        'true' -> {'stop', cb_context:add_system_error('forbidden', Context)};
+        'false' -> Result
+    end.
 
 -spec do_authorize(cb_context:context()) -> boolean().
 do_authorize(Context) ->
