@@ -1,0 +1,55 @@
+services:
+  kazoo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openkazoo-dev
+    working_dir: /src
+    environment:
+      KAZOO_CONFIG: /src/config/config-docker.ini
+      TZ: "UTC"                       # kazoo_apps sanity check requires UTC
+    command: ["./scripts/docker-entrypoint.sh"]
+    stdin_open: true
+    tty: true
+    volumes:
+      - .:/src
+      - build:/src/_build
+      - rebar_cache:/root/.cache/rebar3
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      couchdb:
+        condition: service_healthy
+    ports:
+      - "8000:8000"                   # crossbar REST API
+
+  rabbitmq:
+    image: rabbitmq:3.13.7-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  couchdb:
+    image: couchdb:3
+    environment:
+      COUCHDB_USER: admin
+      COUCHDB_PASSWORD: password
+    ports:
+      - "5984:5984"
+    volumes:
+      - couch_data:/opt/couchdb/data
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "-o", "/dev/null", "-u", "admin:password", "http://localhost:5984/_up"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  build:
+  rebar_cache:
+  couch_data:

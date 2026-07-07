@@ -1,0 +1,9 @@
+.git
+_build
+_checkouts
+*.beam
+*.plt
+*_plt
+erl_crash.dump
+log
+.DS_Store

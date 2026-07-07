@@ -144,3 +144,37 @@ escript:
 	$(REBAR) escriptize
 
 rebuild: distclean deps compile escript dialyzer test
+
+## --- Docker dev environment (see docs/DEV_SETUP.md) -------------------------
+.PHONY: dev dev-stop dev-down dev-clean dev-logs dev-shell dev-bootstrap docker-build docker-test
+
+docker-build:
+	docker compose build
+
+# start rabbitmq + couchdb + kazoo_apps, then tail kazoo logs
+dev:
+	docker compose up -d
+	docker compose logs -f kazoo
+
+dev-logs:
+	docker compose logs -f kazoo
+
+dev-shell:
+	docker compose exec kazoo bash
+
+dev-stop:            ## stop containers, keep containers + volumes
+	docker compose stop
+
+dev-down:            ## remove containers, keep volumes
+	docker compose down
+
+dev-clean:           ## remove containers and volumes
+	docker compose down -v
+
+# one-time: refresh DBs, seed testco account (realm testco.local) + callflow 1000
+dev-bootstrap:
+	docker compose exec kazoo escript /src/scripts/dev-bootstrap.escript
+
+# eunit in a throwaway container (no rabbitmq/couchdb needed)
+docker-test:
+	docker compose run --rm --no-deps kazoo make test
