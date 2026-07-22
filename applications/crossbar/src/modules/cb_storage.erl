@@ -71,16 +71,19 @@ init() ->
 %%------------------------------------------------------------------------------
 -spec authorize(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
 authorize(Context) ->
-    maybe_deny_owner(Context, do_authorize(set_scope(Context))).
+    Scoped = set_scope(Context),
+    maybe_deny_owner(Scoped, do_authorize(Scoped)).
 
 -spec authorize(cb_context:context(), path_token()) -> boolean() | {'stop', cb_context:context()}.
 authorize(Context, ?PLANS_TOKEN) ->
-    maybe_deny_owner(Context, do_authorize(set_scope(Context))).
+    Scoped = set_scope(Context),
+    maybe_deny_owner(Scoped, do_authorize(Scoped)).
 
 -spec authorize(cb_context:context(), path_token(), path_token()) ->
           boolean() | {'stop', cb_context:context()}.
 authorize(Context, ?PLANS_TOKEN, _PlanId) ->
-    maybe_deny_owner(Context, do_authorize(set_scope(Context))).
+    Scoped = set_scope(Context),
+    maybe_deny_owner(Scoped, do_authorize(Scoped)).
 
 %% Storage plans are account/system configuration (they expose the backing
 %% store's credentials); there is no per-owner storage. Deny outright for an
@@ -89,7 +92,9 @@ authorize(Context, ?PLANS_TOKEN, _PlanId) ->
 -spec maybe_deny_owner(cb_context:context(), boolean() | {'stop', cb_context:context()}) ->
           boolean() | {'stop', cb_context:context()}.
 maybe_deny_owner(Context, Result) ->
-    case crossbar_owner_authz:is_enforced(Context) of
+    case scope(Context) =/= 'invalid'
+        andalso crossbar_owner_authz:is_enforced(Context)
+    of
         'true' -> {'stop', cb_context:add_system_error('forbidden', Context)};
         'false' -> Result
     end.
