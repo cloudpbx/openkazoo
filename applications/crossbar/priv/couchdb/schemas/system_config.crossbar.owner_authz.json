@@ -6,7 +6,10 @@
         "general_endpoint_mode": {
             "default": "filter",
             "description": "Behavior when an owner-restricted user requests a general/collection endpoint: 'filter' transparently scopes results to records they own, 'reject' returns 403",
-            "enum": ["filter", "reject"],
+            "enum": [
+                "filter",
+                "reject"
+            ],
             "type": "string"
         },
         "should_restrict_access_to_owner": {
@@ -15,8 +18,8 @@
             "type": "boolean"
         },
         "should_restrict_access_to_unowned": {
-            "default": false,
-            "description": "Also hide records with no owner_id from owner-restricted users",
+            "default": true,
+            "description": "Hide records with no owner_id from owner-restricted users (fail-closed default). Set false to allow restricted users to access ownerless/shared records.",
             "type": "boolean"
         }
     },
