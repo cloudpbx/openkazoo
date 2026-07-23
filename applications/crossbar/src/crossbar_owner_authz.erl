@@ -42,7 +42,8 @@ restrict_unowned(AccountId) ->
             AccountId,
             ?OWNER_AUTHZ_CAT,
             <<"should_restrict_access_to_unowned">>,
-            'false'
+            %% fail-closed: deny records with no owner_id to restricted users by default
+            'true'
         )
     ).
 

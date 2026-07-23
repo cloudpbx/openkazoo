@@ -220,9 +220,32 @@ authorize_doc_test_() ->
                 ?_assertEqual(
                     {'forbidden_ctx'},
                     doc(#{flag => 'true', unowned => 'true', user => ?USER, owner => 'undefined'})
+                )},
+            {"unowned, restrict_unowned UNSET -> forbidden (fail-closed default)",
+                ?_assertEqual(
+                    {'forbidden_ctx'},
+                    doc_default(#{flag => 'true', user => ?USER, owner => 'undefined'})
                 )}
         ]
     end}.
+
+%% Like doc/1 but does NOT stub should_restrict_access_to_unowned, so the code's
+%% own default governs. Locks the fail-closed default.
+doc_default(#{flag := Flag, user := User, owner := Owner}) ->
+    meck:expect('cb_context', 'auth_account_id', fun(_) -> ?ACCT end),
+    meck:expect('cb_context', 'auth_user_id', fun(_) -> User end),
+    meck:expect('cb_context', 'is_superduper_admin', fun(_) -> 'false' end),
+    meck:expect('cb_context', 'is_account_admin', fun(_) -> 'false' end),
+    meck:expect('cb_context', 'add_system_error', fun('forbidden', _C) -> {'forbidden_ctx'} end),
+    meck:expect(
+        'kapps_account_config',
+        'get_global',
+        fun
+            (_A, _C, <<"should_restrict_access_to_owner">>, _D) -> Flag;
+            (_A, _C, _K, D) -> D
+        end
+    ),
+    crossbar_owner_authz:authorize_doc('ctx', Owner).
 
 doc(#{flag := Flag, unowned := Unowned, user := User, owner := Owner}) ->
     meck:expect('cb_context', 'auth_account_id', fun(_) -> ?ACCT end),
