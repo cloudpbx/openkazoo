@@ -183,6 +183,13 @@ authorize_owner_enforced(Context, [{<<"users">>, [UserId|_]}|_]) ->
         'true' -> 'continue';
         'false' -> {'stop', cb_context:add_system_error('forbidden', Context)}
     end;
+authorize_owner_enforced(Context, [{<<"quickcall">>, _}, {<<"users">>, [UserId|_]}|_]) ->
+    %% quickcall nouns lead with {quickcall,_}, so the /users clauses above don't
+    %% match; gate origination to the caller's own user when enforced.
+    case UserId =:= cb_context:auth_user_id(Context) of
+        'true' -> 'continue';
+        'false' -> {'stop', cb_context:add_system_error('forbidden', Context)}
+    end;
 authorize_owner_enforced(_Context, _Nouns) ->
     'continue'.
 

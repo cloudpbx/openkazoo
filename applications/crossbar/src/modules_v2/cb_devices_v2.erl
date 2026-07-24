@@ -24,6 +24,10 @@
         ,lookup_regs/1
         ]).
 
+-ifdef(TEST).
+-export([authorize_quickcall/2]).
+-endif.
+
 -include("crossbar.hrl").
 -include_lib("kazoo_number_manager/include/knm_phone_number.hrl").
 
@@ -123,9 +127,8 @@ authenticate(_Verb, _Nouns) ->
 authorize(Context) ->
     authorize(Context, cb_context:req_verb(Context), cb_context:req_nouns(Context)).
 
-authorize(_Context, ?HTTP_GET, ?DEVICES_QCALL_NOUNS(_DeviceId, _Number)) ->
-    lager:debug("authorizing request"),
-    'true';
+authorize(Context, ?HTTP_GET, ?DEVICES_QCALL_NOUNS(DeviceId, _Number)) ->
+    authorize_quickcall(Context, DeviceId);
 authorize(Context, _Verb, [{<<"devices">>, []} | _]) ->
     crossbar_owner_authz:authorize_collection(Context);
 authorize(_Context, _Verb, _Nouns) ->
@@ -241,6 +244,32 @@ put(Context, DeviceId) ->
 delete(Context, DeviceId) ->
     Context1 = crossbar_doc:delete(Context),
     handle_device_removal(DeviceId, Context1).
+
+%%------------------------------------------------------------------------------
+%% @doc Quickcall originates a call from a device. When owner-authz is enforced,
+%% a non-admin may only quickcall a device they own (fail-closed on missing
+%% device). Admins / flag-off keep stock behaviour.
+%% @end
+%%------------------------------------------------------------------------------
+-spec authorize_quickcall(cb_context:context(), kz_term:ne_binary()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize_quickcall(Context, DeviceId) ->
+    case crossbar_owner_authz:is_enforced(Context) of
+        'false' -> 'true';
+        'true' -> authorize_quickcall_owner(Context, DeviceId)
+    end.
+
+-spec authorize_quickcall_owner(cb_context:context(), kz_term:ne_binary()) ->
+          'true' | {'stop', cb_context:context()}.
+authorize_quickcall_owner(Context, DeviceId) ->
+    case kz_datamgr:open_cache_doc(cb_context:account_db(Context), DeviceId) of
+        {'ok', Doc} ->
+            case crossbar_owner_authz:doc_owner_id(Doc) =:= cb_context:auth_user_id(Context) of
+                'true' -> 'true';
+                'false' -> {'stop', cb_context:add_system_error('forbidden', Context)}
+            end;
+        _Error -> {'stop', cb_context:add_system_error('forbidden', Context)}
+    end.
 
 %%%=============================================================================
 %%% Internal functions
