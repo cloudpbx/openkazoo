@@ -11,6 +11,7 @@
         ,allowed_methods/0, allowed_methods/1
         ,resource_exists/0, resource_exists/1
         ,content_types_provided/1
+        ,authorize/1
         ,validate/1, validate/2
         ,post/2
         ,put/2
@@ -35,11 +36,78 @@ init() ->
     cb_modules_util:bind(?MODULE
                         ,[{<<"*.allowed_methods.channels">>, 'allowed_methods'}
                          ,{<<"*.resource_exists.channels">>, 'resource_exists'}
+                         ,{<<"*.authorize">>, 'authorize'}
                          ,{<<"*.content_types_provided.channels">>, 'content_types_provided'}
                          ,{<<"*.validate.channels">>, 'validate'}
                          ,{<<"*.execute.post.channels">>, 'post'}
                          ,{<<"*.execute.put.channels">>, 'put'}
                          ]).
+
+%%------------------------------------------------------------------------------
+%% @doc Owner-authz for live channels. When enforced (non-admin), a restricted
+%% user may only see/act on their own channels: the account-wide list is scoped
+%% to the caller (filter) or denied (reject); user/device/group channel lists are
+%% gated to owned; a specific channel (read + hangup/transfer/intercept/metaflow)
+%% is denied outright (a live channel has no stored owner_id to check safely).
+%% Admins / flag-off defer to stock behaviour.
+%% @end
+%%------------------------------------------------------------------------------
+-spec authorize(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
+authorize(Context) ->
+    case crossbar_owner_authz:is_enforced(Context) of
+        'false' -> 'false';
+        'true' -> authorize_enforced(Context, cb_context:req_nouns(Context))
+    end.
+
+-spec authorize_enforced(cb_context:context(), req_nouns()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize_enforced(Context, [{<<"channels">>, []}, {<<"users">>, [UserId|_]}|_]) ->
+    authz_self(Context, UserId);
+authorize_enforced(Context, [{<<"channels">>, []}, {<<"devices">>, [DeviceId|_]}|_]) ->
+    authz_device_owner(Context, DeviceId);
+authorize_enforced(Context, [{<<"channels">>, []}, {<<"groups">>, [GroupId|_]}|_]) ->
+    authz_group_member(Context, GroupId);
+authorize_enforced(Context, [{<<"channels">>, []}, {<<"accounts">>, [_]}|_]) ->
+    authz_account_wide(Context);
+authorize_enforced(Context, [{<<"channels">>, []}]) ->
+    authz_account_wide(Context);
+authorize_enforced(_Context, _Nouns) ->
+    %% specific channel (/channels/{id}) is gated at validate/2, not here: the
+    %% authorize binding is not fired for that path. Everything else defers.
+    'false'.
+
+-spec authz_account_wide(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
+authz_account_wide(Context) ->
+    case crossbar_owner_authz:general_endpoint_mode(cb_context:auth_account_id(Context)) of
+        <<"reject">> -> {'stop', cb_context:add_system_error('forbidden', Context)};
+        <<"filter">> -> 'false'
+    end.
+
+-spec authz_self(cb_context:context(), kz_term:api_ne_binary()) -> boolean() | {'stop', cb_context:context()}.
+authz_self(Context, UserId) ->
+    case UserId =:= cb_context:auth_user_id(Context) of
+        'true' -> 'false';
+        'false' -> {'stop', cb_context:add_system_error('forbidden', Context)}
+    end.
+
+-spec authz_device_owner(cb_context:context(), kz_term:ne_binary()) -> boolean() | {'stop', cb_context:context()}.
+authz_device_owner(Context, DeviceId) ->
+    case kz_datamgr:open_cache_doc(cb_context:account_db(Context), DeviceId) of
+        {'ok', Doc} -> authz_self(Context, crossbar_owner_authz:doc_owner_id(Doc));
+        _Error -> {'stop', cb_context:add_system_error('forbidden', Context)}
+    end.
+
+-spec authz_group_member(cb_context:context(), kz_term:ne_binary()) -> boolean() | {'stop', cb_context:context()}.
+authz_group_member(Context, GroupId) ->
+    case kz_datamgr:open_cache_doc(cb_context:account_db(Context), GroupId) of
+        {'ok', Doc} ->
+            Endpoints = kz_json:get_json_value(<<"endpoints">>, Doc, kz_json:new()),
+            case kz_json:get_value(cb_context:auth_user_id(Context), Endpoints) of
+                'undefined' -> {'stop', cb_context:add_system_error('forbidden', Context)};
+                _ -> 'false'
+            end;
+        _Error -> {'stop', cb_context:add_system_error('forbidden', Context)}
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc Given the path tokens related to this module, what HTTP methods are
@@ -101,7 +169,17 @@ validate(Context) ->
 
 -spec validate(cb_context:context(), path_token()) -> cb_context:context().
 validate(Context, Id) ->
-    validate_channel(Context, Id, cb_context:req_verb(Context)).
+    %% A specific live channel has no stored owner_id to verify; deny read/actions
+    %% (hangup/transfer/intercept/metaflow) to owner-restricted users. Admins /
+    %% flag-off proceed. (Enforced at validate: the authorize binding is not fired
+    %% reliably for the /channels/{id} path.)
+    case crossbar_owner_authz:is_enforced(Context) of
+        'true' ->
+            lager:debug("denying specific channel ~s to owner-restricted user", [Id]),
+            cb_context:add_system_error('forbidden', Context);
+        'false' ->
+            validate_channel(Context, Id, cb_context:req_verb(Context))
+    end.
 
 -spec validate_channels(cb_context:context(), http_method()) -> cb_context:context().
 validate_channels(Context, ?HTTP_GET) ->
@@ -257,10 +335,10 @@ summary(Context) ->
             group_summary(Context, GroupId);
         [{<<"channels">>, []}, {<<"accounts">>, [_AccountId]} |_] ->
             lager:debug("getting account summary"),
-            account_summary(Context);
+            maybe_scoped_account_summary(Context);
         [{<<"channels">>,[]}] ->
             lager:debug("getting system-wide summary"),
-            account_summary(Context);
+            maybe_scoped_account_summary(Context);
         _Nouns ->
             lager:debug("unexpected nouns: ~p", [_Nouns]),
             crossbar_util:response_faulty_request(Context)
@@ -330,6 +408,13 @@ group_endpoints_fold(EndpointId, EndpointData, {Acc, Context}) ->
         _Type ->
             lager:debug("skipping type ~s", [_Type]),
             {Acc, Context}
+    end.
+
+-spec maybe_scoped_account_summary(cb_context:context()) -> cb_context:context().
+maybe_scoped_account_summary(Context) ->
+    case crossbar_owner_authz:scope_owner_id(Context) of
+        'undefined' -> account_summary(Context);
+        AuthUserId -> user_summary(Context, AuthUserId)
     end.
 
 -spec account_summary(cb_context:context()) -> cb_context:context().
