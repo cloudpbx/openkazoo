@@ -272,7 +272,29 @@ load_device_summary(Context, _ReqNouns) ->
 load_users_device_summary(Context, UserId) ->
     View = ?OWNER_LIST,
     ViewOptions = [{'key', UserId}],
-    crossbar_doc:load_view(View, ViewOptions, Context, fun normalize_view_results/2).
+    crossbar_doc:load_view(View, ViewOptions, Context, summary_normalizer(Context, UserId)).
+
+%% ?OWNER_LIST emits a row per owner_id AND per hotdesk.users key. Hotdesking is a
+%% transient session on a shared handset, not ownership of its config, so for a
+%% restricted user drop the rows they only hotdesk into - otherwise the summary
+%% lists devices that authorize_loaded_device/1 then 403s. Admins keep the stock,
+%% hotdesk-inclusive listing.
+-spec summary_normalizer(cb_context:context(), kz_term:ne_binary()) ->
+          fun((kz_json:object(), kz_json:objects()) -> kz_json:objects()).
+summary_normalizer(Context, UserId) ->
+    case crossbar_owner_authz:is_enforced(Context) of
+        'false' -> fun normalize_view_results/2;
+        'true' -> fun(JObj, Acc) -> normalize_owned(UserId, JObj, Acc) end
+    end.
+
+-spec normalize_owned(kz_term:ne_binary(), kz_json:object(), kz_json:objects()) ->
+          kz_json:objects().
+normalize_owned(UserId, JObj, Acc) ->
+    Value = kz_json:get_value(<<"value">>, JObj),
+    case kz_json:get_ne_binary_value(<<"owner_id">>, Value) of
+        UserId -> [Value | Acc];
+        _Other -> Acc
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc
@@ -355,12 +377,18 @@ maybe_scope_device_status(Context, RegStatuses) ->
             ]
     end.
 
--spec owned_device_ids(cb_context:context()) -> sets:set().
+-spec owned_device_ids(cb_context:context()) -> sets:set(kz_term:ne_binary()).
 owned_device_ids(Context) ->
     AccountDb = cb_context:account_db(Context),
     AuthUserId = cb_context:auth_user_id(Context),
     case kz_datamgr:get_results(AccountDb, ?OWNER_LIST, [{'key', AuthUserId}]) of
-        {'ok', JObjs} -> sets:from_list([kz_doc:id(JObj) || JObj <- JObjs]);
+        {'ok', JObjs} ->
+            %% see summary_normalizer/2 - hotdesk rows are not ownership
+            sets:from_list([kz_doc:id(JObj)
+                            || JObj <- JObjs,
+                               kz_json:get_ne_binary_value([<<"value">>, <<"owner_id">>], JObj)
+                                   =:= AuthUserId
+                           ]);
         {'error', _R} ->
             lager:warning("failed to load owned device ids for ~s: ~p", [AuthUserId, _R]),
             sets:new()
