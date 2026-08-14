@@ -194,3 +194,23 @@ resolve_uri_path_test_() ->
     [?_assertEqual(RawPathList, kz_http_util:resolve_uri_path(RawPath, Relative))
     ,?_assertEqual(RawPathList, kz_http_util:resolve_uri_path(RawPath, <<"/", Relative/binary>>))
     ].
+
+%% Regression (CORV-999): OTP 26 uri_string:parse rejects raw [ ] in a query
+%% component. json_to_querystring must percent-encode the nested-key and list
+%% brackets so GET webhooks build valid URLs.
+querystring_bracket_encoding_test_() ->
+    Nested = kz_json:from_list([{<<"a">>, kz_json:from_list([{<<"b">>, <<"c">>}])}]),
+    List = kz_json:from_list([{<<"k">>, [<<"1">>, <<"2">>]}]),
+    NestedQS = iolist_to_binary(kz_http_util:json_to_querystring(Nested)),
+    ListQS = iolist_to_binary(kz_http_util:json_to_querystring(List)),
+    Parses = fun(QS) ->
+                     case uri_string:parse(<<"https://h/p?", QS/binary>>) of
+                         {'error', _, _} -> 'error';
+                         _ -> 'ok'
+                     end
+             end,
+    [?_assertEqual(<<"a%5Bb%5D=c">>, NestedQS)
+    ,?_assertEqual(<<"k%5B%5D=1&k%5B%5D=2">>, ListQS)
+    ,?_assertEqual('ok', Parses(NestedQS))
+    ,?_assertEqual('ok', Parses(ListQS))
+    ].
