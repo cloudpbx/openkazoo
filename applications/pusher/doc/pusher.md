@@ -34,3 +34,22 @@ In order for the push services from apple / firebase to work they need to be con
 * `sup pusher_maintenance add_firebase_app(AppId, ServiceAccountFile)`
 * `sup pusher_maintenance add_apple_app(AppId, CertFile)` (uses the default APNs host: api.push.apple.com)
 * `sup pusher_maintenance add_apple_app(AppId, CertFile, Host)` (uses a custom APNs host, i.e. api.development.push.apple.com)
+
+### Webhook
+
+The `webhook` provider POSTs the notification to an arbitrary URL instead of a push
+provider, for devices whose `Token-Type` is `webhook`. The body carries the device token
+and the same encoded payload sent to firebase:
+
+```
+{"token": "<Token-ID>", "data": {"payload": "<json encoded payload>"}}
+```
+
+The URL is taken from `webhook.url` for the app in Token-App, falling back to the
+`default` entry. No push is sent when it is unset. `webhook.headers` are added to the
+POST as HTTP headers, so a shared secret can be configured without a code change.
+
+* `sup pusher_maintenance add_webhook_app(AppId, Url)`
+* `sup pusher_maintenance add_webhook_header(AppId, Key, Value)`
+* `sup pusher_maintenance update_webhook_header(AppId, Key, Value)`
+* `sup pusher_maintenance remove_webhook_header(AppId, Key)`

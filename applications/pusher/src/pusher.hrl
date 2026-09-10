@@ -12,6 +12,7 @@
 -define(APPLE, <<"apple">>).
 -define(APPLE_DEV, <<"apple_dev">>).
 -define(FIREBASE, <<"firebase">>).
+-define(WEBHOOK, <<"webhook">>).
 
 -define(CACHE_NAME, 'pusher_cache').
 
@@ -19,7 +20,7 @@
 -define(TOKEN_KEY, <<"Token-ID">>).
 -define(TOKEN_PROXY_KEY, <<"Proxy-Path">>).
 
--define(MODULES, ['pm_apple', 'pm_firebase', 'pm_apple_dev']).
+-define(MODULES, ['pm_apple', 'pm_firebase', 'pm_apple_dev', 'pm_webhook']).
 
 -type push_app() :: {kz_term:api_pid(), map()} | 'undefined'.
 
