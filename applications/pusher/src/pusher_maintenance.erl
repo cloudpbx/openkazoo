@@ -15,6 +15,8 @@
         ,add_apple_dev_header/3, update_apple_dev_header/3, remove_apple_dev_header/2
         ,add_firebase_header/3, update_firebase_header/3, remove_firebase_header/2
         ,add_provider_header/4, update_provider_header/4, remove_provider_header/3
+        ,add_webhook_app/2
+        ,add_webhook_header/3, update_webhook_header/3, remove_webhook_header/2
         ,push/2
         ]).
 
@@ -113,6 +115,23 @@ update_firebase_header(AppId, Key, Value) ->
 -spec remove_firebase_header(binary(), binary()) -> 'ok' | {'ok', kz_json:object()}.
 remove_firebase_header(AppId, Key) ->
     remove_provider_header(AppId, Key, ?FIREBASE).
+
+-spec add_webhook_app(binary(), binary()) -> 'ok'.
+add_webhook_app(AppId, Url) ->
+    _ = kapps_config:set_node(?CONFIG_CAT, [?WEBHOOK, <<"url">>], Url, AppId),
+    'ok'.
+
+-spec add_webhook_header(binary(), binary(), term()) -> 'ok' | {'ok', kz_json:object()}.
+add_webhook_header(AppId, Key, Value) ->
+    add_provider_header(AppId, Key, Value, ?WEBHOOK).
+
+-spec update_webhook_header(binary(), binary(), term()) -> 'ok' | {'ok', kz_json:object()}.
+update_webhook_header(AppId, Key, Value) ->
+    update_provider_header(AppId, Key, Value, ?WEBHOOK).
+
+-spec remove_webhook_header(binary(), binary()) -> 'ok' | {'ok', kz_json:object()}.
+remove_webhook_header(AppId, Key) ->
+    remove_provider_header(AppId, Key, ?WEBHOOK).
 
 -spec push(kz_term:ne_binary(), kz_term:ne_binary()) -> 'ok'.
 push(AccountId, DeviceId) ->
