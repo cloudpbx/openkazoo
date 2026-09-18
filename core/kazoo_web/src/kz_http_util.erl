@@ -449,7 +449,7 @@ fold_kvs([K|Ks], [V|Vs], Prefix, Acc) ->
 -spec encode_kv(iolist() | binary(), key(), json_term() | json_terms()) -> iodata().
 %% If a list of values, use the []= as a separator between the key and each value
 encode_kv(Prefix, K, Vs) when is_list(Vs) ->
-    encode_kv(Prefix, kz_term:to_binary(K), Vs, <<"[]=">>, []);
+    encode_kv(Prefix, kz_term:to_binary(K), Vs, <<"%5B%5D=">>, []);
 %% if the value is a "simple" value, just encode it (url-encoded)
 encode_kv(Prefix, K, V) when is_binary(V);
                              is_number(V) ->
@@ -463,11 +463,11 @@ encode_kv(Prefix, K, 'false') ->
 %% if no prefix is present, use just key to prefix the key/value pairs in the jobj
 encode_kv(<<>>, K, ?JSON_WRAPPER(_)=JObj) -> json_to_querystring(JObj, [K]);
 %% if a prefix is defined, nest the key in square brackets
-encode_kv(Prefix, K, ?JSON_WRAPPER(_)=JObj) -> json_to_querystring(JObj, [Prefix, <<"[">>, K, <<"]">>]).
+encode_kv(Prefix, K, ?JSON_WRAPPER(_)=JObj) -> json_to_querystring(JObj, [Prefix, <<"%5B">>, K, <<"%5D">>]).
 
 -spec encode_kv(iolist() | binary(), key(), kz_term:ne_binary(), string() | binary()) -> iodata().
 encode_kv(<<>>, K, Sep, V) -> [kz_term:to_binary(K), Sep, kz_term:to_binary(V)];
-encode_kv(Prefix, K, Sep, V) -> [Prefix, <<"[">>, kz_term:to_binary(K), <<"]">>, Sep, kz_term:to_binary(V)].
+encode_kv(Prefix, K, Sep, V) -> [Prefix, <<"%5B">>, kz_term:to_binary(K), <<"%5D">>, Sep, kz_term:to_binary(V)].
 
 -spec encode_kv(iolist() | binary(), key(), [string()], kz_term:ne_binary(), iolist()) -> iodata().
 encode_kv(Prefix, K, [V], Sep, Acc) ->
