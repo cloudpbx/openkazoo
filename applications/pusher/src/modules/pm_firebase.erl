@@ -115,7 +115,7 @@ maybe_load_fcm(App, _, 'undefined', _) ->
 maybe_load_fcm(App, ETS, FCMServiceAcct, Envelope) ->
     FcmName = kz_term:to_atom(<<"fcm_", App/binary>>, 'true'),
     lager:debug("starting new fcm with name ~p", [FcmName]),
-    case fcm:start_pool_with_json_service_file_bin(kz_term:to_atom(<<"fcm_", App/binary>>, 'true'), kz_json:encode(FCMServiceAcct)) of
+    case fcm:start_pool_with_json_service_file_bin(FcmName, kz_term:to_binary(kz_json:encode(FCMServiceAcct))) of
         {'ok', Pid} ->
             lager:debug("started new fcm ~p", [Pid]),
             erlang:link(Pid),
