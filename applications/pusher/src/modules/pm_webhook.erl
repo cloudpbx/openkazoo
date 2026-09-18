@@ -80,7 +80,7 @@ maybe_send_push_notification('undefined', App, _JObj) ->
 maybe_send_push_notification(Url, App, JObj) ->
     TokenID = kz_json:get_value(<<"Token-ID">>, JObj),
     Message = kz_json:from_list([{<<"token">>, TokenID}
-                                ,{<<"data">>, kz_json:from_list([{<<"payload">>, kz_json:encode(build_payload(JObj))}])}
+                                ,{<<"data">>, kz_json:from_list([{<<"payload">>, kz_term:to_binary(kz_json:encode(build_payload(JObj)))}])}
                                 ]),
     Body = kz_json:encode(Message),
     Headers = request_headers(App),

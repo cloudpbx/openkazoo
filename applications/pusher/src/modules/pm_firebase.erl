@@ -84,7 +84,7 @@ maybe_send_push_notification({Pid, Envelope}, JObj) ->
                                  ,{<<"sound">>, kz_json:get_value(<<"Sound">>, JObj)}
                                  ], kz_json:get_value(<<"Payload">>, JObj)),
     Message = #{<<"android">> => Envelope#{<<"ttl">> => <<"10s">>}
-               ,<<"data">> => #{<<"payload">> => kz_json:encode(Payload)}
+               ,<<"data">> => #{<<"payload">> => kz_term:to_binary(kz_json:encode(Payload))}
                },
 
     lager:debug("pushing to ~p: ~s: ~p", [Pid, TokenID, Message]),
