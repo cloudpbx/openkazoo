@@ -25,6 +25,13 @@
 -record(state, {tab :: ets:tid()}).
 -type state() :: #state{}.
 
+-define(FIREBASE_MAP, [{<<"Alert-Key">>, [<<"alert">>, <<"loc-key">>]}
+                      ,{<<"Alert-Params">>, [<<"alert">>, <<"loc-args">>]}
+                      ,{<<"Sound">>, [<<"sound">>]}
+                      ,{<<"Call-ID">>, [<<"Call-ID">>]}
+                      ,{<<"Payload">>, fun kz_json:merge/2}
+                      ]).
+
 -spec start_link() -> kz_types:startlink_ret().
 start_link() ->
     gen_server:start_link({'local', ?SERVER}, ?MODULE, [],[]).
@@ -75,20 +82,29 @@ code_change(_OldVsn, State, _Extra) ->
 maybe_send_push_notification('undefined', _JObj) -> lager:debug("no pid to send push");
 maybe_send_push_notification({Pid, Envelope}, JObj) ->
     TokenID = kz_json:get_value(<<"Token-ID">>, JObj),
-    Alert = #{<<"loc-key">> => kz_json:get_value(<<"Alert-Key">>, JObj)
-             ,<<"loc-args">> => kz_json:get_value(<<"Alert-Params">>, JObj)
-             },
-    Payload = kz_json:set_values([{<<"voip">>, 'true'}
-                                 ,{<<"alert">>, kz_json:from_map(Alert)}
-                                 ,{<<"remote_contact">>, kz_json:get_value([<<"Payload">>, <<"caller-id-number">>], JObj)}
-                                 ,{<<"sound">>, kz_json:get_value(<<"Sound">>, JObj)}
-                                 ], kz_json:get_value(<<"Payload">>, JObj)),
+    Data = kz_json:map(fun(K, V) -> {K, to_data_value(V)} end, build_payload(JObj)),
     Message = #{<<"android">> => Envelope#{<<"ttl">> => <<"10s">>}
-               ,<<"data">> => #{<<"payload">> => kz_json:encode(Payload)}
+               ,<<"data">> => kz_json:to_map(Data)
                },
 
     lager:debug("pushing to ~p: ~s: ~p", [Pid, TokenID, Message]),
     fcm:push(Pid, [TokenID], Message, 3).
+
+-spec build_payload(kz_json:object()) -> kz_json:object().
+build_payload(JObj) ->
+    kz_json:foldl(fun map_key/3, kz_json:new(), JObj).
+
+-spec map_key(term(), term(), kz_json:object()) -> kz_json:object().
+map_key(K, V, JObj) ->
+    case lists:keyfind(K, 1, ?FIREBASE_MAP) of
+        'false' -> JObj;
+        {_, Fun} when is_function(Fun, 2) -> Fun(V, JObj);
+        {_, K1} -> kz_json:set_value(K1, V, JObj)
+    end.
+
+-spec to_data_value(kz_json:json_term()) -> binary().
+to_data_value(V) when is_binary(V) -> V;
+to_data_value(V) -> kz_term:to_binary(kz_json:encode(V)).
 
 -spec get_fcm(kz_term:api_binary(), ets:tid()) -> push_app().
 get_fcm('undefined', _) -> 'undefined';
