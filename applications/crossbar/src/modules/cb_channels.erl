@@ -36,7 +36,7 @@ init() ->
     cb_modules_util:bind(?MODULE
                         ,[{<<"*.allowed_methods.channels">>, 'allowed_methods'}
                          ,{<<"*.resource_exists.channels">>, 'resource_exists'}
-                         ,{<<"*.authorize">>, 'authorize'}
+                         ,{<<"*.authorize.channels">>, 'authorize'}
                          ,{<<"*.content_types_provided.channels">>, 'content_types_provided'}
                          ,{<<"*.validate.channels">>, 'validate'}
                          ,{<<"*.execute.post.channels">>, 'post'}
