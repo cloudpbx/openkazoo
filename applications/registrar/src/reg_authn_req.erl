@@ -11,6 +11,10 @@
         ,handle_req/2
         ]).
 
+-ifdef(TEST).
+-export([external_id_ccvs/1]).
+-endif.
+
 -include("reg.hrl").
 
 -define(ENCRYPTION_MAP, [{<<"srtp">>, [{<<"RTP-Secure-Media">>, 'true'}]}
