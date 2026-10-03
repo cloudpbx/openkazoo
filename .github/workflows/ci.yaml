@@ -5,6 +5,7 @@ on:
     branches: ["4.4"]
   pull_request:
     branches: ["4.4"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -33,7 +34,7 @@ jobs:
       - name: Setup Erlang/OTP
         uses: erlef/setup-beam@v1
         with:
-          otp-version: "27"
+          otp-version: "26"
           rebar3-version: "3.27.0"
 
       - name: Install Go
