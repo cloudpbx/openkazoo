@@ -104,8 +104,26 @@ create_ccvs(#auth_user{doc=JObj}=AuthUser) ->
       ,{<<"Pusher-Application">>, kz_json:get_value([<<"push">>, <<"Token-App">>], JObj)}
        | (create_specific_ccvs(AuthUser, AuthUser#auth_user.method)
           ++ generate_security_ccvs(AuthUser)
-          ++ maybe_add_hotdesk_current_id(AuthUser))
+          ++ maybe_add_hotdesk_current_id(AuthUser)
+          ++ external_id_ccvs(JObj))
       ]).
+
+%% External (non-Kazoo) IDs for the device, taken from the P-Ext-* headers in its
+%% `sip.custom_sip_headers.in'. Kazoo already sends those headers on calls to the
+%% device; returning them as CCVs lets the proxy (Kamailio stores CCVs at
+%% REGISTER) add the same headers to calls from the device, so both legs carry
+%% the same IDs.
+-define(EXTERNAL_ID_HEADERS, [{<<"Ext-Org-ID">>, <<"P-Ext-Org-ID">>}
+                             ,{<<"Ext-User-ID">>, <<"P-Ext-User-ID">>}
+                             ,{<<"Ext-Product-ID">>, <<"P-Ext-Product-ID">>}
+                             ,{<<"Ext-Campaign-ID">>, <<"P-Ext-Campaign-ID">>}
+                             ]).
+
+-spec external_id_ccvs(kz_json:object()) -> kz_term:proplist().
+external_id_ccvs(JObj) ->
+    [{CCV, kzd_devices:custom_sip_header_inbound(JObj, Header)}
+     || {CCV, Header} <- ?EXTERNAL_ID_HEADERS
+    ].
 
 -spec maybe_get_presence_id(auth_user()) -> kz_term:api_binary().
 maybe_get_presence_id(#auth_user{account_db=AccountDb
