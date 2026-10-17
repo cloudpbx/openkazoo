@@ -10,8 +10,11 @@
     is_enforced/1,
     general_endpoint_mode/1,
     authorize_collection/1,
+    authorize_noun_collection/2,
     authorize_doc/2,
+    authorize_loaded_doc/1,
     scope_owner_id/1,
+    scope_or/2,
     maybe_scope_nouns/2,
     filter_owned/2,
     doc_owner_id/1
@@ -118,6 +121,55 @@ authorize_collection(Context, UserId) ->
                 [cb_context:auth_user_id(Context), UserId]
             ),
             {'stop', cb_context:add_system_error('forbidden', Context)}
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Shared account-wide-collection wiring for modules whose per-noun
+%% authorize/2 reduces to "authorize_collection/1 if this is that noun's
+%% empty-args collection form, else defer". Covers the repeated
+%% `authorize_nouns(Context, [{Tag, []}|_]) -> authorize_collection(Context)'
+%% clause duplicated across cb_cdrs, cb_recordings, cb_call_inspector,
+%% cb_groups, cb_faxes, cb_sms, cb_mms.
+%% @end
+%%------------------------------------------------------------------------------
+-spec authorize_noun_collection(cb_context:context(), kz_term:ne_binary()) ->
+    boolean() | {'stop', cb_context:context()}.
+authorize_noun_collection(Context, Tag) ->
+    case cb_context:req_nouns(Context) of
+        [{Tag, []} | _] -> authorize_collection(Context);
+        _Nouns -> 'false'
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Enforce ownership on a doc already loaded into Context (post
+%% crossbar_doc:load). No-op (returns Context unchanged) unless load
+%% succeeded. Covers the repeated `authorize_loaded_X/1' pattern duplicated
+%% across cb_devices_v2, cb_sms, cb_mms, cb_faxes, cb_recordings, cb_cdrs.
+%% @end
+%%------------------------------------------------------------------------------
+-spec authorize_loaded_doc(cb_context:context()) -> cb_context:context().
+authorize_loaded_doc(Context) ->
+    case cb_context:resp_status(Context) of
+        'success' ->
+            OwnerId = doc_owner_id(cb_context:doc(Context)),
+            authorize_doc(Context, OwnerId);
+        _Other ->
+            Context
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc scope_owner_id/1 with a caller-supplied fallback for "what to use
+%% when not in enforced filter mode". Covers the repeated
+%% `case scope_owner_id(Context) of 'undefined' -> Default; Id -> Id end'
+%% pattern duplicated across cb_mms (summary_view_keys), cb_groups
+%% (summary_user_id), cb_recordings (summary_owner_id).
+%% @end
+%%------------------------------------------------------------------------------
+-spec scope_or(cb_context:context(), Default) -> kz_term:ne_binary() | Default.
+scope_or(Context, Default) ->
+    case scope_owner_id(Context) of
+        'undefined' -> Default;
+        OwnerId -> OwnerId
     end.
 
 -spec requested_owner_id(req_nouns()) -> kz_term:api_ne_binary().

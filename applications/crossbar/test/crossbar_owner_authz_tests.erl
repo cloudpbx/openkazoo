@@ -376,6 +376,165 @@ fo(#{flag := Flag, unowned := Unowned, user := User}, JObjs) ->
     ),
     crossbar_owner_authz:filter_owned('fake_context', JObjs).
 
+authorize_noun_collection_test_() ->
+    {'setup', fun setup/0, fun cleanup/1, fun(_) ->
+        [
+            {"matching empty-args noun, enforced account-wide filter mode -> defer (false)",
+                ?_assertEqual(
+                    'false',
+                    noun_col(
+                        #{
+                            flag => 'true',
+                            mode => <<"filter">>,
+                            user => ?USER,
+                            nouns => [{<<"cdrs">>, []}, {<<"accounts">>, [?ACCT]}]
+                        },
+                        <<"cdrs">>
+                    )
+                )},
+            {"matching empty-args noun, enforced reject mode -> stop",
+                ?_assertMatch(
+                    {'stop', _},
+                    noun_col(
+                        #{
+                            flag => 'true',
+                            mode => <<"reject">>,
+                            user => ?USER,
+                            nouns => [{<<"cdrs">>, []}, {<<"accounts">>, [?ACCT]}]
+                        },
+                        <<"cdrs">>
+                    )
+                )},
+            {"non-matching tag -> defer (false), never delegates",
+                ?_assertEqual(
+                    'false',
+                    noun_col(
+                        #{
+                            flag => 'true',
+                            mode => <<"reject">>,
+                            user => ?USER,
+                            nouns => [{<<"sms">>, []}, {<<"accounts">>, [?ACCT]}]
+                        },
+                        <<"cdrs">>
+                    )
+                )},
+            {"matching tag but with args (specific record, not collection) -> defer (false)",
+                ?_assertEqual(
+                    'false',
+                    noun_col(
+                        #{
+                            flag => 'true',
+                            mode => <<"reject">>,
+                            user => ?USER,
+                            nouns => [{<<"cdrs">>, [<<"some_id">>]}, {<<"accounts">>, [?ACCT]}]
+                        },
+                        <<"cdrs">>
+                    )
+                )}
+        ]
+    end}.
+
+noun_col(#{flag := Flag, mode := Mode, user := User, nouns := Nouns}, Tag) ->
+    meck:expect('cb_context', 'auth_account_id', fun(_) -> ?ACCT end),
+    meck:expect('cb_context', 'auth_user_id', fun(_) -> User end),
+    meck:expect('cb_context', 'is_superduper_admin', fun(_) -> 'false' end),
+    meck:expect('cb_context', 'is_account_admin', fun(_) -> 'false' end),
+    meck:expect('cb_context', 'req_nouns', fun(_) -> Nouns end),
+    meck:expect('cb_context', 'add_system_error', fun('forbidden', _C) -> {'forbidden_ctx'} end),
+    meck:expect(
+        'kapps_account_config',
+        'get_global',
+        fun
+            (_A, _C, <<"should_restrict_access_to_owner">>, _D) -> Flag;
+            (_A, _C, <<"general_endpoint_mode">>, _D) -> Mode;
+            (_A, _C, _K, D) -> D
+        end
+    ),
+    crossbar_owner_authz:authorize_noun_collection('fake_context', Tag).
+
+authorize_loaded_doc_test_() ->
+    {'setup', fun setup/0, fun cleanup/1, fun(_) ->
+        [
+            {"load failed -> context unchanged, authz never consulted",
+                ?_assertEqual(
+                    'ctx',
+                    loaded(#{status => 'error', flag => 'true', user => ?USER, owner => <<"other">>})
+                )},
+            {"load succeeded, owner matches -> unchanged",
+                ?_assertEqual(
+                    'ctx',
+                    loaded(#{status => 'success', flag => 'true', user => ?USER, owner => ?USER})
+                )},
+            {"load succeeded, owner differs -> forbidden",
+                ?_assertEqual(
+                    {'forbidden_ctx'},
+                    loaded(#{status => 'success', flag => 'true', user => ?USER, owner => <<"other">>})
+                )},
+            {"load succeeded, not enforced -> unchanged regardless of owner",
+                ?_assertEqual(
+                    'ctx',
+                    loaded(#{status => 'success', flag => 'false', user => ?USER, owner => <<"other">>})
+                )}
+        ]
+    end}.
+
+loaded(#{status := Status, flag := Flag, user := User, owner := Owner}) ->
+    Doc = kz_json:from_list([{<<"owner_id">>, Owner}]),
+    meck:expect('cb_context', 'resp_status', fun(_) -> Status end),
+    meck:expect('cb_context', 'doc', fun(_) -> Doc end),
+    meck:expect('cb_context', 'auth_account_id', fun(_) -> ?ACCT end),
+    meck:expect('cb_context', 'auth_user_id', fun(_) -> User end),
+    meck:expect('cb_context', 'is_superduper_admin', fun(_) -> 'false' end),
+    meck:expect('cb_context', 'is_account_admin', fun(_) -> 'false' end),
+    meck:expect('cb_context', 'add_system_error', fun('forbidden', _C) -> {'forbidden_ctx'} end),
+    meck:expect(
+        'kapps_account_config',
+        'get_global',
+        fun
+            (_A, _C, <<"should_restrict_access_to_owner">>, _D) -> Flag;
+            (_A, _C, <<"should_restrict_access_to_unowned">>, _D) -> 'false';
+            (_A, _C, _K, D) -> D
+        end
+    ),
+    crossbar_owner_authz:authorize_loaded_doc('ctx').
+
+scope_or_test_() ->
+    {'setup', fun setup/0, fun cleanup/1, fun(_) ->
+        [
+            {"not enforced -> default",
+                ?_assertEqual(
+                    <<"default">>,
+                    scope_or(#{flag => 'false', mode => <<"filter">>, user => ?USER})
+                )},
+            {"enforced, reject mode -> default (scope_owner_id only applies in filter mode)",
+                ?_assertEqual(
+                    <<"default">>,
+                    scope_or(#{flag => 'true', mode => <<"reject">>, user => ?USER})
+                )},
+            {"enforced, filter mode -> auth user id",
+                ?_assertEqual(
+                    ?USER,
+                    scope_or(#{flag => 'true', mode => <<"filter">>, user => ?USER})
+                )}
+        ]
+    end}.
+
+scope_or(#{flag := Flag, mode := Mode, user := User}) ->
+    meck:expect('cb_context', 'auth_account_id', fun(_) -> ?ACCT end),
+    meck:expect('cb_context', 'auth_user_id', fun(_) -> User end),
+    meck:expect('cb_context', 'is_superduper_admin', fun(_) -> 'false' end),
+    meck:expect('cb_context', 'is_account_admin', fun(_) -> 'false' end),
+    meck:expect(
+        'kapps_account_config',
+        'get_global',
+        fun
+            (_A, _C, <<"should_restrict_access_to_owner">>, _D) -> Flag;
+            (_A, _C, <<"general_endpoint_mode">>, _D) -> Mode;
+            (_A, _C, _K, D) -> D
+        end
+    ),
+    crossbar_owner_authz:scope_or('fake_context', <<"default">>).
+
 setup() ->
     meck:new('cb_context', ['non_strict']),
     meck:new('kapps_account_config', ['non_strict']),
