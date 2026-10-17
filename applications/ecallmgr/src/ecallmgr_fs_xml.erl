@@ -732,6 +732,14 @@ kazoo_var_to_fs_var_fold(<<"Force-Fax">>, Direction, Acc) ->
     [encode_fs_val("execute_on_answer", Val) | Acc];
 kazoo_var_to_fs_var_fold(<<"Channel-Actions">>, Actions, Acc) ->
     [Actions |Acc];
+%% SPECIAL CASE: also expose the interaction id as an outbound SIP header so
+%% Kamailio/FreeSWITCH logs can link the legs of one interaction, the same
+%% way CDRs already do via the Interaction-Id field.
+kazoo_var_to_fs_var_fold(<<?CALL_INTERACTION_ID>>, V, Acc) ->
+    [encode_fs_val("sip_h_X-Kazoo-Interaction-ID", V)
+    ,encode_fs_val([?CHANNEL_VAR_PREFIX, ?CALL_INTERACTION_ID], V)
+     | Acc
+    ];
 kazoo_var_to_fs_var_fold(K, V, Acc) ->
     case lists:keyfind(K, 1, ?SPECIAL_CHANNEL_VARS) of
         'false' ->
