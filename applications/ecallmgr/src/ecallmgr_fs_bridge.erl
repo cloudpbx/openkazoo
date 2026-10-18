@@ -13,6 +13,9 @@
         ,try_create_bridge_string/2
         ]).
 
+%% Exported for eunit; not part of the module's real interface.
+-export([maybe_strip_interaction_id/2]).
+
 -include("ecallmgr.hrl").
 
 -define(BYPASS_MEDIA_AFTER_BRIDGE, kapps_config:get_boolean(?APP_NAME, <<"use_bypass_media_after_bridge">>, 'false')).
@@ -321,18 +324,38 @@ build_channels_vars(Node, UUID, Endpoints, JObj) ->
                ,fun maybe_add_interaction_id/4
                ],
     Props = lists:foldl(fun(F, Acc) -> Acc ++ F(Node, UUID, Endpoints, JObj) end, [], Routines),
-    ecallmgr_fs_xml:get_channel_vars(kz_json:set_values(Props, JObj)).
+    UpdatedJObj = maybe_strip_interaction_id(Endpoints, kz_json:set_values(Props, JObj)),
+    ecallmgr_fs_xml:get_channel_vars(UpdatedJObj).
 
 %% The bridge command from kapps does not always carry the interaction id,
 %% so expand it from the a-leg; the CCV fold then emits X-Kazoo-Interaction-ID.
 %% Safe to set unconditionally: when the id is already present in JObj it is
 %% the same value this expands to, since both trace back to the same
-%% per-channel variable.
+%% per-channel variable. maybe_strip_interaction_id/2 removes it again below
+%% for carrier-bound bridges, so this does not need to know about that case.
 -spec maybe_add_interaction_id(atom(), kz_term:ne_binary(), kz_json:objects(), kz_json:object()) -> kz_term:proplist().
 maybe_add_interaction_id(_Node, _UUID, _Endpoints, _JObj) ->
     [{[<<"Custom-Channel-Vars">>, <<?CALL_INTERACTION_ID>>]
      ,<<"${", ?CHANNEL_VAR_PREFIX, ?CALL_INTERACTION_ID, "}">>
      }].
+
+%% CORV-1954: the interaction id is for correlating Kazoo/Kamailio/FreeSWITCH
+%% logs across legs. It is internal to Kazoo and should not reach an external
+%% carrier or customer SBC by default. When every endpoint in this bridge is
+%% a carrier/gateway trunk (stepswitch always builds those with Invite-Format
+%% "route", never a device), strip it, whether it was just added above or was
+%% already present in JObj from an upstream CCV.
+-spec maybe_strip_interaction_id(kz_json:objects(), kz_json:object()) -> kz_json:object().
+maybe_strip_interaction_id([], JObj) -> JObj;
+maybe_strip_interaction_id(Endpoints, JObj) ->
+    case lists:all(fun is_carrier_endpoint/1, Endpoints) of
+        'true' -> kz_json:delete_key([<<"Custom-Channel-Vars">>, <<?CALL_INTERACTION_ID>>], JObj);
+        'false' -> JObj
+    end.
+
+-spec is_carrier_endpoint(kz_json:object()) -> boolean().
+is_carrier_endpoint(Endpoint) ->
+    kz_json:get_ne_binary_value(<<"Invite-Format">>, Endpoint) =:= <<"route">>.
 
 -spec maybe_force_fax(atom(), kz_term:ne_binary(), kz_json:objects(), kz_json:object()) -> kz_term:proplist().
 maybe_force_fax(_Node, _UUID, Endpoints, JObj) ->
