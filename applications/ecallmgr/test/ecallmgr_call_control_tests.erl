@@ -12,5 +12,5 @@
 call_interaction_id_prefers_ccvs_test() ->
     CCVs = kz_json:from_list([{<<?CALL_INTERACTION_ID>>, <<"63959390461-7ff3e916">>}]),
     ?assertEqual(<<"63959390461-7ff3e916">>
-                 ,ecallmgr_call_control:call_interaction_id(<<"call-id">>, CCVs)
-                 ).
+                ,ecallmgr_call_control:call_interaction_id(<<"call-id">>, CCVs)
+                ).
