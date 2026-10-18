@@ -172,6 +172,7 @@ code_change(_OldVsn, State, _Extra) ->
 -spec process_route_req(atom(), atom(), kz_term:ne_binary(), kz_term:ne_binary(), kzd_freeswitch:data()) -> 'ok'.
 process_route_req(Section, Node, FetchId, CallId, Props) ->
     kz_util:put_callid(CallId),
+    kz_util:put_interaction_id(props:get_value(?GET_CCV(<<?CALL_INTERACTION_ID>>), Props)),
     case kz_term:is_true(props:get_value(<<"variable_recovered">>, Props)) of
         'false' -> do_process_route_req(Section, Node, FetchId, CallId, Props);
         'true' ->

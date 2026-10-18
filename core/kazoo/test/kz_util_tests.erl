@@ -250,3 +250,14 @@ uniq_test_() ->
                                 ])
                   )
     ].
+
+put_interaction_id_test_() ->
+    {'setup'
+    ,fun() -> kz_util:kz_log_md_clear() end
+    ,fun(_) -> kz_util:kz_log_md_clear() end
+    ,[?_assertEqual('ok', kz_util:put_interaction_id('undefined'))
+     ,?_assertEqual('undefined', props:get_value('interaction_id', lager:md()))
+     ,?_assertEqual('ok', kz_util:put_interaction_id(<<"63959390461-7ff3e916">>))
+     ,?_assertEqual(<<"63959390461-7ff3e916">>, props:get_value('interaction_id', lager:md()))
+     ]
+    }.

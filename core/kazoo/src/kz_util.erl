@@ -23,6 +23,7 @@
 
 -export([runs_in/3]).
 -export([put_callid/1, get_callid/0, find_callid/1
+        ,put_interaction_id/1
         ,spawn/1, spawn/2
         ,spawn_link/1, spawn_link/2
         ,spawn_monitor/2, spawn_monitor/3
@@ -370,6 +371,18 @@ put_callid(Atom) when is_atom(Atom) ->
     'ok';
 put_callid(APITerm) ->
     put_callid(find_callid(APITerm)).
+
+%%------------------------------------------------------------------------------
+%% @doc Tags the process's log metadata with the call's `interaction_id',
+%% alongside whatever `put_callid/1' already set, so Kazoo's own application
+%% logs can be correlated across legs by interaction id, not only by call id.
+%% @end
+%%------------------------------------------------------------------------------
+-spec put_interaction_id(kz_term:api_ne_binary()) -> 'ok'.
+put_interaction_id('undefined') -> 'ok';
+put_interaction_id(InteractionId) when is_binary(InteractionId) ->
+    _ = kz_log_md_put('interaction_id', InteractionId),
+    'ok'.
 
 -spec get_callid() -> kz_term:api_ne_binary().
 get_callid() -> erlang:get('callid').
