@@ -46,6 +46,8 @@
 
 %% API
 -export([start_link/5, stop/1]).
+%% Exported for eunit; not part of the module's real interface.
+-export([call_interaction_id/2]).
 -export([queue_name/1]).
 -export([callid/1]).
 -export([node/1]).
@@ -193,6 +195,7 @@ fs_nodedown(Srv, Node) ->
 -spec init([atom() | kz_term:ne_binary() | kz_json:object()]) -> {'ok', state()}.
 init([Node, CallId, FetchId, ControllerQ, CCVs]) ->
     kz_util:put_callid(CallId),
+    kz_util:put_interaction_id(call_interaction_id(CallId, CCVs)),
     lager:debug("starting call control listener"),
     gen_listener:cast(self(), 'init'),
 
@@ -208,6 +211,20 @@ init([Node, CallId, FetchId, ControllerQ, CCVs]) ->
                  ,controller_q=ControllerQ
                  ,initial_ccvs=CCVs
                  }}.
+
+%% The constructor's own CCVs are often empty (start_control_process/3 passes
+%% kz_json:new()), so fall back to the live channel record, which the router
+%% already populated by the time call control starts.
+-spec call_interaction_id(kz_term:ne_binary(), kz_json:object()) -> kz_term:api_ne_binary().
+call_interaction_id(CallId, CCVs) ->
+    case kz_json:get_ne_binary_value(<<?CALL_INTERACTION_ID>>, CCVs) of
+        'undefined' ->
+            case ecallmgr_fs_channel:fetch(CallId) of
+                {'ok', Channel} -> kz_json:get_ne_binary_value(<<"interaction_id">>, Channel);
+                {'error', 'not_found'} -> 'undefined'
+            end;
+        InteractionId -> InteractionId
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc Handling call messages.
