@@ -9,6 +9,9 @@
 
 -export([start_link/1, start_link/2]).
 
+%% Exported for eunit; not part of the module's real interface.
+-export([interaction_props/3]).
+
 -export([init/1
         ,handle_call/3
         ,handle_cast/2
@@ -117,15 +120,26 @@ handle_info(_Other, State) ->
     lager:debug("unhandled msg: ~p", [_Other]),
     {'noreply', State}.
 
+%% Adopts an inbound interaction id instead of minting a new one, so a call
+%% crossing clusters keeps the same id its CDRs and logs will be linked by.
+%% The legacy `X-Call-Interaction-ID` header takes priority over the newer
+%% `X-Kazoo-Interaction-ID` header (CORV-1906) so a cluster already sending
+%% the legacy header keeps behaving exactly as before.
 -spec interaction_props(atom(), kz_term:ne_binary(), kz_term:proplist()) -> kz_term:proplist().
 interaction_props(Node, CallId, FSData) ->
     case props:get_value(?GET_CCV(<<?CALL_INTERACTION_ID>>), FSData) of
         'undefined' ->
-            InterActionId = props:get_value(?GET_CUSTOM_HEADER(<<"Call-Interaction-ID">>), FSData, ?CALL_INTERACTION_DEFAULT),
+            InterActionId = inbound_interaction_id(FSData),
             kz_util:spawn(fun ecallmgr_fs_command:set/3, [Node, CallId, [{<<?CALL_INTERACTION_ID>>, InterActionId}]]),
             [{?GET_CCV(<<?CALL_INTERACTION_ID>>), InterActionId}];
         _InterActionId -> []
     end.
+
+-spec inbound_interaction_id(kz_term:proplist()) -> kz_term:ne_binary().
+inbound_interaction_id(FSData) ->
+    props:get_value(?GET_CUSTOM_HEADER(<<"Call-Interaction-ID">>), FSData,
+                    props:get_value(?GET_CUSTOM_HEADER(<<"Kazoo-Interaction-ID">>), FSData,
+                                    ?CALL_INTERACTION_DEFAULT)).
 
 %%------------------------------------------------------------------------------
 %% @doc This function is called by a `gen_server' when it is about to
