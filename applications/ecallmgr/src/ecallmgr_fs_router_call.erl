@@ -138,8 +138,8 @@ interaction_props(Node, CallId, FSData) ->
 -spec inbound_interaction_id(kz_term:proplist()) -> kz_term:ne_binary().
 inbound_interaction_id(FSData) ->
     props:get_value(?GET_CUSTOM_HEADER(<<"Call-Interaction-ID">>), FSData,
-                     props:get_value(?GET_CUSTOM_HEADER(<<"Kazoo-Interaction-ID">>), FSData,
-                                      ?CALL_INTERACTION_DEFAULT)).
+                    props:get_value(?GET_CUSTOM_HEADER(<<"Kazoo-Interaction-ID">>), FSData,
+                                    ?CALL_INTERACTION_DEFAULT)).
 
 %%------------------------------------------------------------------------------
 %% @doc This function is called by a `gen_server' when it is about to
