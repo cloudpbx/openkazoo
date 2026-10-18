@@ -318,9 +318,21 @@ try_create_bridge_string(Endpoints, JObj) ->
 build_channels_vars(Node, UUID, Endpoints, JObj) ->
     Routines = [fun maybe_force_fax/4
                ,fun add_bridge_actions/4
+               ,fun maybe_add_interaction_id/4
                ],
     Props = lists:foldl(fun(F, Acc) -> Acc ++ F(Node, UUID, Endpoints, JObj) end, [], Routines),
     ecallmgr_fs_xml:get_channel_vars(kz_json:set_values(Props, JObj)).
+
+%% The bridge command from kapps does not always carry the interaction id,
+%% so expand it from the a-leg; the CCV fold then emits X-Kazoo-Interaction-ID.
+%% Safe to set unconditionally: when the id is already present in JObj it is
+%% the same value this expands to, since both trace back to the same
+%% per-channel variable.
+-spec maybe_add_interaction_id(atom(), kz_term:ne_binary(), kz_json:objects(), kz_json:object()) -> kz_term:proplist().
+maybe_add_interaction_id(_Node, _UUID, _Endpoints, _JObj) ->
+    [{[<<"Custom-Channel-Vars">>, <<?CALL_INTERACTION_ID>>]
+     ,<<"${", ?CHANNEL_VAR_PREFIX, ?CALL_INTERACTION_ID, "}">>
+     }].
 
 -spec maybe_force_fax(atom(), kz_term:ne_binary(), kz_json:objects(), kz_json:object()) -> kz_term:proplist().
 maybe_force_fax(_Node, _UUID, Endpoints, JObj) ->
