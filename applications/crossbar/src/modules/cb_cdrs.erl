@@ -686,13 +686,7 @@ load_cdr(CDRId, Context) ->
 
 -spec authorize_loaded_cdr(cb_context:context()) -> cb_context:context().
 authorize_loaded_cdr(Context) ->
-    case cb_context:resp_status(Context) of
-        'success' ->
-            OwnerId = crossbar_owner_authz:doc_owner_id(cb_context:doc(Context)),
-            crossbar_owner_authz:authorize_doc(Context, OwnerId);
-        _Other ->
-            Context
-    end.
+    crossbar_owner_authz:authorize_loaded_doc(Context).
 
 %%------------------------------------------------------------------------------
 %% @doc Load Legs for a cdr interaction from the database
