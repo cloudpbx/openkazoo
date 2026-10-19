@@ -123,7 +123,7 @@ handle_info(_Other, State) ->
 %% Adopts an inbound interaction id instead of minting a new one, so a call
 %% crossing clusters keeps the same id its CDRs and logs will be linked by.
 %% The legacy `X-Call-Interaction-ID` header takes priority over the newer
-%% `X-Kazoo-Interaction-ID` header (CORV-1906) so a cluster already sending
+%% `X-KAZOO-Interaction-ID` header (CORV-1906) so a cluster already sending
 %% the legacy header keeps behaving exactly as before.
 -spec interaction_props(atom(), kz_term:ne_binary(), kz_term:proplist()) -> kz_term:proplist().
 interaction_props(Node, CallId, FSData) ->
@@ -138,7 +138,7 @@ interaction_props(Node, CallId, FSData) ->
 -spec inbound_interaction_id(kz_term:proplist()) -> kz_term:ne_binary().
 inbound_interaction_id(FSData) ->
     props:get_value(?GET_CUSTOM_HEADER(<<"Call-Interaction-ID">>), FSData,
-                    props:get_value(?GET_CUSTOM_HEADER(<<"Kazoo-Interaction-ID">>), FSData,
+                    props:get_value(?GET_CUSTOM_HEADER(<<"KAZOO-Interaction-ID">>), FSData,
                                     ?CALL_INTERACTION_DEFAULT)).
 
 %%------------------------------------------------------------------------------
