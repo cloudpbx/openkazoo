@@ -52,20 +52,11 @@ init() ->
 %%------------------------------------------------------------------------------
 -spec authorize(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
 authorize(Context) ->
-    authorize_nouns(Context, cb_context:req_nouns(Context)).
+    crossbar_owner_authz:authorize_noun_collection(Context, <<"groups">>).
 
 -spec authorize(cb_context:context(), path_token()) -> boolean() | {'stop', cb_context:context()}.
-authorize(Context, _Id) ->
-    authorize_nouns(Context, cb_context:req_nouns(Context)).
-
--spec authorize_nouns(cb_context:context(), req_nouns()) ->
-          boolean() | {'stop', cb_context:context()}.
-authorize_nouns(Context, [{<<"groups">>, []}|_]) ->
-    crossbar_owner_authz:authorize_collection(Context);
-authorize_nouns(Context, [{<<"groups">>, [GroupId|_]}|_]) ->
-    authorize_group_member(Context, GroupId);
-authorize_nouns(_Context, _Nouns) ->
-    'false'.
+authorize(Context, GroupId) ->
+    authorize_group_member(Context, GroupId).
 
 %% A restricted (non-admin) session may act on a specific group only if the
 %% authenticated user is one of the group's endpoints. Covers all verbs since
@@ -232,18 +223,9 @@ validate_patch(Id, Context) ->
 %%------------------------------------------------------------------------------
 -spec summary(cb_context:context()) -> cb_context:context().
 summary(Context) ->
-    case summary_user_id(Context) of
+    case crossbar_owner_authz:scope_or(Context, cb_context:user_id(Context)) of
         'undefined' -> crossbar_doc:load_view(?CB_LIST, [], Context, fun normalize_view_results/2);
         UserId -> crossbar_doc:load_view(?CB_LIST_BY_USER, [{'key', UserId}], Context, fun normalize_view_results/2)
-    end.
-
-%% In filter mode, force the caller's own membership listing (groups the user
-%% belongs to); otherwise use whatever the URL implied.
--spec summary_user_id(cb_context:context()) -> kz_term:api_ne_binary().
-summary_user_id(Context) ->
-    case crossbar_owner_authz:scope_owner_id(Context) of
-        'undefined' -> cb_context:user_id(Context);
-        OwnerId -> OwnerId
     end.
 
 %%------------------------------------------------------------------------------
