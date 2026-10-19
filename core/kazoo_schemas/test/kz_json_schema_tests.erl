@@ -210,6 +210,18 @@ name_and_did(JObj) ->
      || Server <- kz_json:get_value(<<"servers">>, JObj)
     ].
 
+metaflow_data_without_sibling_module_test_() ->
+    {'ok', Schema} = kz_json_schema:fload(<<"metaflow">>),
+    %% "module" missing at the top level (it is mis-nested one level
+    %% deeper here), reproducing the badarg crash in
+    %% kz_json_schema_extensions:extra_validation/3 when the sibling
+    %% lookup falls through to 'undefined'.
+    JObj = kz_json:from_list([{<<"data">>, kz_json:from_list([{<<"module">>, <<"record_call">>}
+                                                             ,{<<"data">>, kz_json:from_list([{<<"action">>, <<"start">>}])}
+                                                             ])}
+                             ]),
+    [?_assertMatch({'error', _}, kz_json_schema:validate(Schema, JObj))].
+
 validate_regexp_test_() ->
     {ok, SchemaJObj} = kz_json:fixture(?APP, "fixtures/schema_regexp.json"),
 

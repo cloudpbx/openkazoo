@@ -60,9 +60,12 @@ extra_validation(Value, State) ->
 extra_validation(<<"metaflow.data">>, Value, State) ->
     JObj = jesse_state:get_current_value(State),
     [_Data | Path] = jesse_state:get_current_path(State),
-    Module = jesse_json_path:path(lists:reverse([<<"module">> | Path]), JObj, 'undefined'),
-    lager:debug("validating metaflow action '~s' with data ~p", [Module, Value]),
-    validate_module_data(<<"metaflows.", Module/binary>>, Value, State);
+    case jesse_json_path:path(lists:reverse([<<"module">> | Path]), JObj, 'undefined') of
+        'undefined' -> State;
+        Module ->
+            lager:debug("validating metaflow action '~s' with data ~p", [Module, Value]),
+            validate_module_data(<<"metaflows.", Module/binary>>, Value, State)
+    end;
 
 extra_validation(<<"metaflow.module">>, Value, State) ->
     lager:debug("validating metaflow action '~s'", [Value]),
