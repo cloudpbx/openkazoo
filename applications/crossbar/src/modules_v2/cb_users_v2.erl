@@ -150,9 +150,41 @@ authenticate_users(?USERS_QCALL_NOUNS(_UserId, _Number), ?HTTP_GET) ->
     'true';
 authenticate_users(_Nouns, _Verb) -> 'false'.
 
--spec authorize(cb_context:context()) -> 'true'.
+-spec authorize(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
 authorize(Context) ->
-    authorize_users(cb_context:req_nouns(Context), cb_context:req_verb(Context)).
+    Nouns = cb_context:req_nouns(Context),
+    case authorize_owner(Context, Nouns) of
+        'continue' -> authorize_users(Nouns, cb_context:req_verb(Context));
+        Stop -> Stop
+    end.
+
+%% Owner self-scoping: a user "owns" only their own user record. When the
+%% opt-in owner policy is enforced for a non-admin session, a specific
+%% /users/{id} request is allowed only when {id} is the caller; the
+%% account-wide /users collection is denied in reject mode and scoped to the
+%% caller in filter mode (see load_users_summary). Admins / flag-off defer.
+-spec authorize_owner(cb_context:context(), req_nouns()) ->
+          'continue' | {'stop', cb_context:context()}.
+authorize_owner(Context, Nouns) ->
+    case crossbar_owner_authz:is_enforced(Context) of
+        'false' -> 'continue';
+        'true' -> authorize_owner_enforced(Context, Nouns)
+    end.
+
+-spec authorize_owner_enforced(cb_context:context(), req_nouns()) ->
+          'continue' | {'stop', cb_context:context()}.
+authorize_owner_enforced(Context, [{<<"users">>, []}|_]) ->
+    case crossbar_owner_authz:general_endpoint_mode(cb_context:auth_account_id(Context)) of
+        <<"reject">> -> {'stop', cb_context:add_system_error('forbidden', Context)};
+        _ -> 'continue'
+    end;
+authorize_owner_enforced(Context, [{<<"users">>, [UserId|_]}|_]) ->
+    case UserId =:= cb_context:auth_user_id(Context) of
+        'true' -> 'continue';
+        'false' -> {'stop', cb_context:add_system_error('forbidden', Context)}
+    end;
+authorize_owner_enforced(_Context, _Nouns) ->
+    'continue'.
 
 authorize_users(?USERS_QCALL_NOUNS(_UserId, _Number), ?HTTP_GET) ->
     lager:debug("authorizing request"),
@@ -438,12 +470,33 @@ send_email(Context) ->
 
 -spec load_users_summary(cb_context:context()) -> cb_context:context().
 load_users_summary(Context) ->
-    fix_envelope(
-      crossbar_doc:load_view(?CB_LIST
-                            ,[]
-                            ,Context
-                            ,fun normalize_view_results/2
-                            )).
+    maybe_scope_users_summary(Context
+                             ,fix_envelope(
+                                crossbar_doc:load_view(?CB_LIST
+                                                      ,[]
+                                                      ,Context
+                                                      ,fun normalize_view_results/2
+                                                      ))).
+
+%% In filter mode, reduce the account-wide user listing to just the caller's
+%% own record (a user owns only their own record). Reject mode never reaches
+%% here (denied in authorize). Rows without a matching id are dropped
+%% (fail-closed). Admins / flag-off are unaffected.
+-spec maybe_scope_users_summary(cb_context:context(), cb_context:context()) ->
+          cb_context:context().
+maybe_scope_users_summary(ReqContext, Context) ->
+    case crossbar_owner_authz:is_enforced(ReqContext)
+        andalso cb_context:resp_status(Context) =:= 'success'
+    of
+        'false' -> Context;
+        'true' ->
+            AuthUserId = cb_context:auth_user_id(ReqContext),
+            Own = [J
+                   || J <- cb_context:resp_data(Context),
+                      kz_json:get_first_defined([<<"id">>, <<"_id">>], J) =:= AuthUserId
+                  ],
+            cb_context:set_resp_data(Context, Own)
+    end.
 
 -spec fix_envelope(cb_context:context()) -> cb_context:context().
 fix_envelope(Context) ->
