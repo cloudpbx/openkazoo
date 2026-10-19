@@ -221,6 +221,8 @@ maybe_execute_command(Context, CallId, <<"intercept">>) ->
     maybe_intercept(Context, CallId);
 maybe_execute_command(Context, CallId, <<"move">>) ->
     maybe_move(Context, CallId);
+maybe_execute_command(Context, CallId, <<"record_call">>) ->
+    maybe_record(Context, CallId);
 maybe_execute_command(Context, _CallId, _Command) ->
     lager:debug("unknown command: ~s", [_Command]),
     crossbar_util:response_invalid_data(cb_context:doc(Context), Context).
@@ -552,6 +554,35 @@ maybe_intercept(Context, CallId, TargetType, TargetId) ->
 %% All params are optional.
 %% @end
 %%------------------------------------------------------------------------------
+%%------------------------------------------------------------------------------
+%% @doc API action for starting, stopping, masking, or unmasking the
+%% recording of a live call. `Data' is passed straight through to
+%% `konami_record_call', so it takes the same shape: `action'
+%% (`start'/`stop'/`mask'/`unmask'), plus `format', `time_limit', and
+%% `url' for `start'.
+%% @end
+%%------------------------------------------------------------------------------
+-spec maybe_record(cb_context:context(), kz_term:ne_binary()) -> cb_context:context().
+maybe_record(Context, CallId) ->
+    Data = cb_context:req_value(Context, <<"data">>, kz_json:new()),
+    case kz_json:get_ne_binary_value(<<"action">>, Data) of
+        'undefined' ->
+            cb_context:add_validation_error(<<"data.action">>
+                                           ,<<"required">>
+                                           ,kz_json:from_list([{<<"message">>, <<"No record action specified">>}])
+                                           ,Context
+                                           );
+        RecordAction ->
+            API = [{<<"Call-ID">>, CallId}
+                  ,{<<"Action">>, <<"record_call">>}
+                  ,{<<"Data">>, Data}
+                   | kz_api:default_headers(?APP_NAME, ?APP_VERSION)
+                  ],
+            lager:debug("attempting to ~s recording on ~s", [RecordAction, CallId]),
+            kz_amqp_worker:cast(API, fun kapi_metaflow:publish_action/1),
+            crossbar_util:response_202(<<"recording action sent">>, Context)
+    end.
+
 -spec maybe_move(cb_context:context(), kz_term:ne_binary()) -> cb_context:context().
 maybe_move(Context, CallId) ->
     API = [{<<"Call-ID">>, CallId}
