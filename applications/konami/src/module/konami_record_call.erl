@@ -35,11 +35,29 @@ handle(_Data, Call, <<"unmask">>) ->
     kapps_call:unmask_recording(Call);
 handle(Data, Call, <<"start">>) ->
     lager:debug("starting recording, see you on the other side"),
+    announce(<<"recording-start">>, Call),
     kapps_call:start_recording(Data, Call);
 handle(_Data, Call, <<"stop">>) ->
     _ = kapps_call:stop_recording(Call),
     lager:debug("sent command to stop recording call"),
+    announce(<<"recording-stop">>, Call),
     Call.
+
+%% `Leg: "Both"' reaches both parties in one command when ecallmgr's
+%% `is_bridged/1' is true at the moment the command runs (the common
+%% case). It falls back to self-leg-only when `is_bridged/1' is false
+%% (CORV-1986, not yet root-caused). Sending a second explicit command for
+%% the other leg was tried as a workaround for that case, but it either
+%% double-plays (when "Both" is used on both) or drops audio entirely
+%% (when "self" is used on both, confirmed live: nothing played). Until
+%% CORV-1986 has a real fix, a single "Both" command is the safer choice:
+%% reliable when bridged, and silent only on the far leg in the rarer
+%% unbridged case, rather than risking a broken announcement either way.
+-spec announce(kz_term:ne_binary(), kapps_call:call()) -> 'ok'.
+announce(PromptId, Call) ->
+    Media = kz_media_util:get_prompt(PromptId, kapps_call:language(Call), kapps_call:account_id(Call)),
+    PlayCommand = kapps_call_command:play_command(Media, ?ANY_DIGIT, <<"Both">>, Call),
+    kapps_call_command:send_command(kz_json:set_value(<<"Insert-At">>, <<"now">>, PlayCommand), Call).
 
 -spec get_action(kz_term:api_ne_binary()) -> kz_term:ne_binary().
 get_action('undefined') -> <<"start">>;
