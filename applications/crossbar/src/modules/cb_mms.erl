@@ -55,18 +55,11 @@ init() ->
 %%------------------------------------------------------------------------------
 -spec authorize(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
 authorize(Context) ->
-    authorize_nouns(Context, cb_context:req_nouns(Context)).
+    crossbar_owner_authz:authorize_noun_collection(Context, <<"mms">>).
 
 -spec authorize(cb_context:context(), path_token()) -> boolean() | {'stop', cb_context:context()}.
 authorize(Context, _Id) ->
-    authorize_nouns(Context, cb_context:req_nouns(Context)).
-
--spec authorize_nouns(cb_context:context(), req_nouns()) ->
-          boolean() | {'stop', cb_context:context()}.
-authorize_nouns(Context, [{<<"mms">>, []}|_]) ->
-    crossbar_owner_authz:authorize_collection(Context);
-authorize_nouns(_Context, _Nouns) ->
-    'false'.
+    crossbar_owner_authz:authorize_noun_collection(Context, <<"mms">>).
 
 %%------------------------------------------------------------------------------
 %% @doc Given the path tokens related to this module, what HTTP methods are
@@ -129,17 +122,9 @@ validate_mms(Context, Id, ?HTTP_GET) ->
 validate_mms(Context, Id, ?HTTP_DELETE) ->
     authorize_loaded_message(read(Id, Context)).
 
-%% Enforce owner ownership on a loaded message (owner_id lives on the doc or
-%% under custom_channel_vars). No-op unless the owner policy is enforced.
 -spec authorize_loaded_message(cb_context:context()) -> cb_context:context().
 authorize_loaded_message(Context) ->
-    case cb_context:resp_status(Context) of
-        'success' ->
-            OwnerId = crossbar_owner_authz:doc_owner_id(cb_context:doc(Context)),
-            crossbar_owner_authz:authorize_doc(Context, OwnerId);
-        _Other ->
-            Context
-    end.
+    crossbar_owner_authz:authorize_loaded_doc(Context).
 
 %%------------------------------------------------------------------------------
 %% @doc If the HTTP verb is PUT, execute the actual action, usually a db save.
