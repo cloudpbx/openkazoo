@@ -7,18 +7,18 @@
 -module(crossbar_owner_authz).
 
 -export([
-    is_enforced/1,
-    general_endpoint_mode/1,
-    authorize_collection/1,
-    authorize_noun_collection/2,
-    authorize_doc/2,
-    authorize_loaded_doc/1,
-    scope_owner_id/1,
-    scope_or/2,
-    maybe_scope_nouns/2,
-    filter_owned/2,
-    doc_owner_id/1
-]).
+         is_enforced/1,
+         general_endpoint_mode/1,
+         authorize_collection/1,
+         authorize_noun_collection/2,
+         authorize_doc/2,
+         authorize_loaded_doc/1,
+         scope_owner_id/1,
+         scope_or/2,
+         maybe_scope_nouns/2,
+         filter_owned/2,
+         doc_owner_id/1
+        ]).
 
 -include("crossbar.hrl").
 
@@ -30,25 +30,25 @@
 -spec restrict_to_owner(kz_term:api_ne_binary()) -> boolean().
 restrict_to_owner(AccountId) ->
     kz_term:is_true(
-        kapps_account_config:get_global(
-            AccountId,
-            ?OWNER_AUTHZ_CAT,
-            <<"should_restrict_access_to_owner">>,
-            'false'
-        )
-    ).
+      kapps_account_config:get_global(
+        AccountId,
+        ?OWNER_AUTHZ_CAT,
+        <<"should_restrict_access_to_owner">>,
+        'false'
+       )
+     ).
 
 -spec restrict_unowned(kz_term:api_ne_binary()) -> boolean().
 restrict_unowned(AccountId) ->
     kz_term:is_true(
-        kapps_account_config:get_global(
-            AccountId,
-            ?OWNER_AUTHZ_CAT,
-            <<"should_restrict_access_to_unowned">>,
-            %% fail-closed: deny records with no owner_id to restricted users by default
-            'true'
-        )
-    ).
+      kapps_account_config:get_global(
+        AccountId,
+        ?OWNER_AUTHZ_CAT,
+        <<"should_restrict_access_to_unowned">>,
+        %% fail-closed: deny records with no owner_id to restricted users by default
+        'true'
+       )
+     ).
 
 -spec general_endpoint_mode(kz_term:api_ne_binary()) -> <<_:48>>.
 %% Return is precisely one of the literal binaries `<<"reject">>' or `<<"filter">>'
@@ -58,11 +58,11 @@ restrict_unowned(AccountId) ->
 general_endpoint_mode(AccountId) ->
     case
         kapps_account_config:get_global(
-            AccountId,
-            ?OWNER_AUTHZ_CAT,
-            <<"general_endpoint_mode">>,
-            <<"filter">>
-        )
+          AccountId,
+          ?OWNER_AUTHZ_CAT,
+          <<"general_endpoint_mode">>,
+          <<"filter">>
+         )
     of
         <<"reject">> -> <<"reject">>;
         _ -> <<"filter">>
@@ -76,7 +76,7 @@ general_endpoint_mode(AccountId) ->
 is_enforced(Context) ->
     AccountId = cb_context:auth_account_id(Context),
     restrict_to_owner(AccountId) andalso
-        (not is_admin(Context)) andalso
+                                   (not is_admin(Context)) andalso
         cb_context:auth_user_id(Context) =/= 'undefined'.
 
 -spec is_admin(cb_context:context()) -> boolean().
@@ -92,7 +92,7 @@ is_admin(Context) ->
 %% Callers must only invoke this for collection endpoints (not specific records).
 %%------------------------------------------------------------------------------
 -spec authorize_collection(cb_context:context()) ->
-    boolean() | {'stop', cb_context:context()}.
+          boolean() | {'stop', cb_context:context()}.
 authorize_collection(Context) ->
     case is_enforced(Context) of
         'false' -> 'false';
@@ -104,9 +104,9 @@ authorize_collection(Context, 'undefined') ->
     case general_endpoint_mode(cb_context:auth_account_id(Context)) of
         <<"reject">> ->
             lager:debug(
-                "rejecting account-wide collection for restricted user ~s (reject mode)",
-                [cb_context:auth_user_id(Context)]
-            ),
+              "rejecting account-wide collection for restricted user ~s (reject mode)",
+              [cb_context:auth_user_id(Context)]
+             ),
             {'stop', cb_context:add_system_error('forbidden', Context)};
         <<"filter">> ->
             'false'
@@ -117,9 +117,9 @@ authorize_collection(Context, UserId) ->
             'true';
         _Other ->
             lager:debug(
-                "rejecting cross-user collection: auth user ~s requested ~s",
-                [cb_context:auth_user_id(Context), UserId]
-            ),
+              "rejecting cross-user collection: auth user ~s requested ~s",
+              [cb_context:auth_user_id(Context), UserId]
+             ),
             {'stop', cb_context:add_system_error('forbidden', Context)}
     end.
 
@@ -133,7 +133,7 @@ authorize_collection(Context, UserId) ->
 %% @end
 %%------------------------------------------------------------------------------
 -spec authorize_noun_collection(cb_context:context(), kz_term:ne_binary()) ->
-    boolean() | {'stop', cb_context:context()}.
+          boolean() | {'stop', cb_context:context()}.
 authorize_noun_collection(Context, Tag) ->
     case cb_context:req_nouns(Context) of
         [{Tag, []} | _] -> authorize_collection(Context);
@@ -198,7 +198,7 @@ authorize_doc(Context, OwnerId) ->
 %% (Context, OwnerId, OwnerId) equality clause cannot collide on 'undefined'/'undefined';
 %% an 'undefined' OwnerId falls through to the dedicated unowned clause below.
 -spec authorize_owner(cb_context:context(), kz_term:api_ne_binary(), kz_term:ne_binary()) ->
-    cb_context:context().
+          cb_context:context().
 authorize_owner(Context, OwnerId, OwnerId) ->
     Context;
 authorize_owner(Context, 'undefined', _AuthUserId) ->
@@ -217,7 +217,7 @@ authorize_owner(Context, _OwnerId, _AuthUserId) ->
 scope_owner_id(Context) ->
     case
         is_enforced(Context) andalso
-            general_endpoint_mode(cb_context:auth_account_id(Context)) =:= <<"filter">>
+        general_endpoint_mode(cb_context:auth_account_id(Context)) =:= <<"filter">>
     of
         'true' -> cb_context:auth_user_id(Context);
         'false' -> 'undefined'
@@ -241,9 +241,9 @@ inject_user_noun([{_Mod, _Args} = ModNoun, {?KZ_ACCOUNTS_DB, _} = Acct | Rest], 
 inject_user_noun(Nouns, _UserId) ->
     %% already users-scoped (users noun precedes accounts) or unexpected shape
     lager:debug(
-        "filter scoping expected but noun shape was unexpected; proceeding account-wide: ~p",
-        [Nouns]
-    ),
+      "filter scoping expected but noun shape was unexpected; proceeding account-wide: ~p",
+      [Nouns]
+     ),
     Nouns.
 
 %%------------------------------------------------------------------------------
@@ -278,5 +278,5 @@ is_owned(JObj, AuthUserId, RestrictUnowned) ->
 -spec doc_owner_id(kz_json:object()) -> kz_term:api_ne_binary().
 doc_owner_id(JObj) ->
     kz_json:get_first_defined(
-        [[<<"custom_channel_vars">>, <<"owner_id">>], <<"owner_id">>], JObj
-    ).
+      [[<<"custom_channel_vars">>, <<"owner_id">>], <<"owner_id">>], JObj
+     ).
