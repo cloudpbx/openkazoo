@@ -324,7 +324,7 @@ build_channels_vars(Node, UUID, Endpoints, JObj) ->
     ecallmgr_fs_xml:get_channel_vars(kz_json:set_values(Props, JObj)).
 
 %% The bridge command from kapps does not always carry the interaction id,
-%% so expand it from the a-leg; the CCV fold then emits X-Kazoo-Interaction-ID.
+%% so expand it from the a-leg; the CCV fold then emits X-KAZOO-Interaction-ID.
 %% Safe to set unconditionally: when the id is already present in JObj it is
 %% the same value this expands to, since both trace back to the same
 %% per-channel variable.

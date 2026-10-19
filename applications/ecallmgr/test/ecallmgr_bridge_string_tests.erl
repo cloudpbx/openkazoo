@@ -46,7 +46,7 @@ sip_headers_test() ->
 -spec interaction_id_header_test() -> any().
 interaction_id_header_test() ->
     CCVs = kz_json:from_list([{<<"Call-Interaction-ID">>, <<"63959390461-7ff3e916">>}]),
-    ?assertEqual([<<"sip_h_X-Kazoo-Interaction-ID='63959390461-7ff3e916'">>
+    ?assertEqual([<<"sip_h_X-KAZOO-Interaction-ID='63959390461-7ff3e916'">>
                  ,<<"ecallmgr_Call-Interaction-ID='63959390461-7ff3e916'">>
                  ]
                 ,ecallmgr_fs_xml:build_leg_vars([{<<"Custom-Channel-Vars">>, CCVs}])
