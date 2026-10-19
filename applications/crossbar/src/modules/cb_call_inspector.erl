@@ -51,23 +51,14 @@ init() ->
 %%------------------------------------------------------------------------------
 -spec authorize(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
 authorize(Context) ->
-    authorize_nouns(Context, cb_context:req_nouns(Context)).
+    crossbar_owner_authz:authorize_noun_collection(Context, <<"call_inspector">>).
 
 -spec authorize(cb_context:context(), path_token()) -> boolean() | {'stop', cb_context:context()}.
 authorize(Context, _CallId) ->
-    authorize_nouns(Context, cb_context:req_nouns(Context)).
-
--spec authorize_nouns(cb_context:context(), req_nouns()) ->
-          boolean() | {'stop', cb_context:context()}.
-authorize_nouns(Context, [{<<"call_inspector">>, []}|_]) ->
-    crossbar_owner_authz:authorize_collection(Context);
-authorize_nouns(Context, [{<<"call_inspector">>, [_CallId]}|_]) ->
     case crossbar_owner_authz:is_enforced(Context) of
         'true' -> {'stop', cb_context:add_system_error('forbidden', Context)};
         'false' -> 'false'
-    end;
-authorize_nouns(_Context, _Nouns) ->
-    'false'.
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc Given the path tokens related to this module, what HTTP methods are
