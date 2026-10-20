@@ -10,6 +10,7 @@
 -module(cb_recordings).
 
 -export([init/0
+        ,authorize/1, authorize/2
         ,allowed_methods/0, allowed_methods/1
         ,resource_exists/0, resource_exists/1
         ,content_types_provided/2
@@ -40,9 +41,32 @@ init() ->
                ,{<<"*.resource_exists.recordings">>, 'resource_exists'}
                ,{<<"*.content_types_provided.recordings">>, 'content_types_provided'}
                ,{<<"*.validate.recordings">>, 'validate'}
+               ,{<<"*.authorize.recordings">>, 'authorize'}
                ,{<<"*.execute.delete.recordings">>, 'delete'}
                ],
     cb_modules_util:bind(?MODULE, Bindings).
+
+%%------------------------------------------------------------------------------
+%% @doc Owner gating: the account-wide collection is rejected (reject mode) or
+%% deferred and scoped by owner (filter mode, see recording_summary); a
+%% specific recording is authorized against its owner_id after load. Admins
+%% and flag-off defer to the normal account-hierarchy gate.
+%% @end
+%%------------------------------------------------------------------------------
+-spec authorize(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
+authorize(Context) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize(cb_context:context(), path_token()) -> boolean() | {'stop', cb_context:context()}.
+authorize(Context, _RecordingId) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize_nouns(cb_context:context(), req_nouns()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize_nouns(Context, [{<<"recordings">>, []}|_]) ->
+    crossbar_owner_authz:authorize_collection(Context);
+authorize_nouns(_Context, _Nouns) ->
+    'false'.
 
 %%------------------------------------------------------------------------------
 %% @doc Given the path tokens related to this module, what HTTP methods are
@@ -103,12 +127,24 @@ validate(Context, RecordingId) ->
 validate_recording(Context, RecordingId, ?HTTP_GET) ->
     case action_lookup(Context) of
         'read' ->
-            load_recording_doc(Context, RecordingId);
+            authorize_loaded_recording(load_recording_doc(Context, RecordingId));
         'download' ->
-            load_recording_binary(Context, RecordingId)
+            authorize_loaded_recording(load_recording_binary(Context, RecordingId))
     end;
 validate_recording(Context, RecordingId, ?HTTP_DELETE) ->
-    load_recording_doc(Context, RecordingId).
+    authorize_loaded_recording(load_recording_doc(Context, RecordingId)).
+
+%% Enforce owner ownership on a loaded recording (owner_id lives on the doc or
+%% under custom_channel_vars). No-op unless the owner policy is enforced.
+-spec authorize_loaded_recording(cb_context:context()) -> cb_context:context().
+authorize_loaded_recording(Context) ->
+    case cb_context:resp_status(Context) of
+        'success' ->
+            OwnerId = crossbar_owner_authz:doc_owner_id(cb_context:doc(Context)),
+            crossbar_owner_authz:authorize_doc(Context, OwnerId);
+        _Other ->
+            Context
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc
@@ -120,7 +156,7 @@ delete(Context, _RecordingId) ->
 
 -spec recording_summary(cb_context:context()) -> cb_context:context().
 recording_summary(Context) ->
-    UserId = cb_context:user_id(Context),
+    UserId = summary_owner_id(Context),
     ViewName = get_view_name(UserId),
     Options = [{'mapper', fun summary_doc_fun/2}
               ,{'range_start_keymap', [UserId]}
@@ -150,6 +186,15 @@ attachment_content_type(_Name, Meta, CTs) ->
 -spec build_end_key(kz_time:gregorian_seconds(), kz_term:api_ne_binary()) -> kazoo_data:range_key().
 build_end_key(Timestamp, 'undefined') -> [Timestamp, kz_json:new()];
 build_end_key(Timestamp, UserId) -> [UserId, Timestamp, kz_json:new()].
+
+%% In filter mode, force the owner-scoped view keyed to the caller even for an
+%% account-wide /recordings request; otherwise use whatever the URL implied.
+-spec summary_owner_id(cb_context:context()) -> kz_term:api_ne_binary().
+summary_owner_id(Context) ->
+    case crossbar_owner_authz:scope_owner_id(Context) of
+        'undefined' -> cb_context:user_id(Context);
+        OwnerId -> OwnerId
+    end.
 
 -spec get_view_name(kz_term:api_ne_binary()) -> kz_term:ne_binary().
 get_view_name('undefined') -> ?CB_LIST;
