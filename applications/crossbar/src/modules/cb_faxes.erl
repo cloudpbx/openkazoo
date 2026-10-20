@@ -7,6 +7,7 @@
 -module(cb_faxes).
 
 -export([init/0
+        ,authorize/1, authorize/2, authorize/3, authorize/4
         ,allowed_methods/0, allowed_methods/1, allowed_methods/2, allowed_methods/3
         ,resource_exists/0, resource_exists/1, resource_exists/2, resource_exists/3
         ,content_types_provided/4
@@ -79,8 +80,47 @@ init() ->
     _ = crossbar_bindings:bind(<<"*.content_types_provided.faxes">>, ?MODULE, 'content_types_provided'),
     _ = crossbar_bindings:bind(<<"*.content_types_accepted.faxes">>, ?MODULE, 'content_types_accepted'),
     _ = crossbar_bindings:bind(<<"*.validate.faxes">>, ?MODULE, 'validate'),
+    _ = crossbar_bindings:bind(<<"*.authorize.faxes">>, ?MODULE, 'authorize'),
     _ = crossbar_bindings:bind(<<"*.execute.put.faxes">>, ?MODULE, 'put'),
     _ = crossbar_bindings:bind(<<"*.execute.delete.faxes">>, ?MODULE, 'delete').
+
+%%------------------------------------------------------------------------------
+%% @doc Owner gating: a folder collection (inbox/outbox/incoming/outgoing/
+%% smtplog) is rejected (reject mode) or deferred and scoped to the caller
+%% (filter mode, see get_filter_doc); a specific fax is authorized against its
+%% owner_id after load (see load_fax_meta / load_modb_fax_doc). Admins /
+%% flag-off defer to the normal account-hierarchy gate.
+%% @end
+%%------------------------------------------------------------------------------
+-spec authorize(cb_context:context()) -> boolean() | {'stop', cb_context:context()}.
+authorize(Context) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize(cb_context:context(), path_token()) -> boolean() | {'stop', cb_context:context()}.
+authorize(Context, _Folder) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize(cb_context:context(), path_token(), path_token()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize(Context, _Folder, _Id) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize(cb_context:context(), path_token(), path_token(), path_token()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize(Context, _Folder, _Id, _Attachment) ->
+    authorize_nouns(Context, cb_context:req_nouns(Context)).
+
+-spec authorize_nouns(cb_context:context(), req_nouns()) ->
+          boolean() | {'stop', cb_context:context()}.
+authorize_nouns(Context, [{<<"faxes">>, [Folder]}|_])
+  when Folder =:= ?INBOX;
+       Folder =:= ?OUTBOX;
+       Folder =:= ?INCOMING;
+       Folder =:= ?OUTGOING;
+       Folder =:= ?SMTP_LOG ->
+    crossbar_owner_authz:authorize_collection(Context);
+authorize_nouns(_Context, _Nouns) ->
+    'false'.
 
 %%------------------------------------------------------------------------------
 %% @doc Given the path tokens related to this module, what HTTP methods are
@@ -396,7 +436,7 @@ read(Id, Type, Context) ->
 -spec load_modb_fax_doc(kz_term:ne_binary(), kz_term:ne_binary(), cb_context:context()) -> cb_context:context().
 load_modb_fax_doc(Id, Folder, Context) ->
     Ctx = validate_fax_doc_folder(Folder, read(Id, ?FAX_TYPE, Context)),
-    crossbar_util:apply_response_map(Ctx, ?OUTBOX_FAX_DOC_MAP).
+    authorize_loaded_fax(crossbar_util:apply_response_map(Ctx, ?OUTBOX_FAX_DOC_MAP)).
 
 -spec validate_fax_doc_folder(kz_term:ne_binary(), cb_context:context()) -> cb_context:context().
 validate_fax_doc_folder(Folder, Context) ->
@@ -463,7 +503,19 @@ get_fax_running_status(Id, Q) ->
 %%------------------------------------------------------------------------------
 -spec load_fax_meta(kz_term:ne_binary(), kz_term:ne_binary(), cb_context:context()) -> cb_context:context().
 load_fax_meta(FaxId, Folder, Context) ->
-    validate_fax_doc_folder(Folder, crossbar_doc:load({<<"fax">>, FaxId}, Context, ?TYPE_CHECK_OPTION(<<"fax">>))).
+    authorize_loaded_fax(validate_fax_doc_folder(Folder, crossbar_doc:load({<<"fax">>, FaxId}, Context, ?TYPE_CHECK_OPTION(<<"fax">>)))).
+
+%% Enforce owner ownership on a loaded fax (owner_id lives on the doc). No-op
+%% unless the owner policy is enforced.
+-spec authorize_loaded_fax(cb_context:context()) -> cb_context:context().
+authorize_loaded_fax(Context) ->
+    case cb_context:resp_status(Context) of
+        'success' ->
+            OwnerId = crossbar_owner_authz:doc_owner_id(cb_context:doc(Context)),
+            crossbar_owner_authz:authorize_doc(Context, OwnerId);
+        _Other ->
+            Context
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc
@@ -588,9 +640,17 @@ get_view_and_filter(Context, {_, _}, 'undefined') ->
 
 -spec get_filter_doc(cb_context:context()) -> {kz_term:api_ne_binary(), kz_term:api_ne_binary()}.
 get_filter_doc(Context) ->
-    case cb_context:fetch(Context, <<"faxbox">>) of
-        'undefined' -> maybe_user_filter_doc(Context);
-        JObj -> {kz_doc:id(JObj), kz_doc:type(JObj)}
+    case crossbar_owner_authz:scope_owner_id(Context) of
+        'undefined' ->
+            case cb_context:fetch(Context, <<"faxbox">>) of
+                'undefined' -> maybe_user_filter_doc(Context);
+                JObj -> {kz_doc:id(JObj), kz_doc:type(JObj)}
+            end;
+        %% Filter mode: force the caller's owner filter so the listing uses the
+        %% owner-scoped view, ignoring any faxbox filter that could otherwise
+        %% expose another owner's faxes.
+        OwnerId ->
+            {OwnerId, <<"user">>}
     end.
 
 -spec maybe_user_filter_doc(cb_context:context()) -> {kz_term:api_ne_binary(), kz_term:api_ne_binary()}.
