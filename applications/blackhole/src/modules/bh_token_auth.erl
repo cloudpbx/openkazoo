@@ -46,14 +46,20 @@ auth_token(Context, 'undefined') ->
 auth_token(Context, Token)
   when is_binary(Token)->
     lager:debug("trying to authenticate with token: ~s", [Token]),
-    case kz_auth:validate_token(Token) of
+    %% validate_token can throw (e.g. badarg) on a malformed/forged token; catch
+    %% it and fail closed with a clean error instead of crashing the WS handler.
+    try kz_auth:validate_token(Token) of
         {'ok', JObj} ->
             lager:info("token auth is valid, authenticating : ~p", [JObj]),
             AccountId = kz_json:get_ne_value(<<"account_id">>, JObj),
             bh_context:set_auth_account_id(Context, AccountId);
         {'error', R} ->
             lager:debug("failed to authenticate token auth, ~p", [R]),
-            bh_context:add_error(Context, <<"failed to authenticate token ", Token/binary>>)
+            bh_context:add_error(Context, <<"failed to authenticate token">>)
+    catch
+        _E:_R ->
+            lager:debug("malformed auth token rejected: ~p:~p", [_E, _R]),
+            bh_context:add_error(Context, <<"invalid authentication token">>)
     end;
 auth_token(Context, _Token) ->
     lager:warning("token is not of required type, , ~p", [_Token]),
