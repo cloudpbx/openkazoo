@@ -83,6 +83,25 @@ microsecs_to_secs_test() ->
     Secs = 1310157838,
     ?assertEqual(Secs, kz_time:microseconds_to_seconds(Microsecs)).
 
+%% Regression tests for openkazoo/kazoo#12: CDRs output a local-time RFC3339
+%% timestamp instead of a bare UTC one.
+rfc3339_local_utc_test() ->
+    ?assertEqual(<<"2026-01-15T12:00:00+00:00">>
+                ,kz_time:rfc3339_local({{2026,1,15},{12,0,0}}, <<"Etc/UTC">>)
+                ).
+
+rfc3339_local_offset_test() ->
+    %% January is outside US daylight saving, so America/New_York is a fixed -05:00
+    ?assertEqual(<<"2026-01-15T07:00:00-05:00">>
+                ,kz_time:rfc3339_local({{2026,1,15},{12,0,0}}, <<"America/New_York">>)
+                ).
+
+rfc3339_local_from_gregorian_seconds_test() ->
+    GregorianSecs = calendar:datetime_to_gregorian_seconds({{2026,1,15},{12,0,0}}),
+    ?assertEqual(<<"2026-01-15T12:00:00+00:00">>
+                ,kz_time:rfc3339_local(GregorianSecs, <<"Etc/UTC">>)
+                ).
+
 elapsed_test_() ->
     Start = {1401,998570,817606},
     Now = {1401,998594,798064},
