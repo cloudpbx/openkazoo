@@ -183,3 +183,51 @@ inbound_onnet_trunkstore_win() ->
                       ),
     'true' = kapi_route:win_v(RouteWin),
     RouteWin.
+
+%% Regression tests for openkazoo/kazoo#13: whether a caller ID gets
+%% validated now depends on system_config, the account document, and
+%% whether the call used passthrough caller ID, OR'd together at two
+%% levels (plain and owner-scoped).
+should_check_validity_test_() ->
+    {'setup'
+    ,fun () -> meck:new('kapps_config', ['non_strict']) end
+    ,fun (_) -> meck:unload('kapps_config') end
+    ,fun (_) ->
+             meck:expect('kapps_config', 'get_is_true', fun(<<"callflow">>, _Key, Default) -> Default end),
+             [{"neither system_config nor the account doc require validity: false"
+              ,?_assertNot(kz_attributes:should_check_validity(kz_json:new(), 'false'))
+              }
+             ,{"account doc turns on plain validity checking"
+              ,?_assert(kz_attributes:should_check_validity(kzd_accounts:set_caller_id_options_ensure_valid(kz_json:new(), 'true'), 'false'))
+              }
+             ,{"plain validity account flag does not imply passthrough validity is required"
+              ,?_assertNot(kz_attributes:should_check_validity(kz_json:new(), 'true'))
+              }
+             ,{"account doc turns on passthrough validity checking"
+              ,?_assert(kz_attributes:should_check_validity(kzd_accounts:set_caller_id_options_passthrough_ensure_valid(kz_json:new(), 'true'), 'true'))
+              }
+             ,{"plain validity, once required, also applies when passthrough is in use"
+              ,?_assert(kz_attributes:should_check_validity(kzd_accounts:set_caller_id_options_ensure_valid(kz_json:new(), 'true'), 'true'))
+              }
+             ]
+     end
+    }.
+
+should_check_validity_owner_test_() ->
+    {'setup'
+    ,fun () -> meck:new('kapps_config', ['non_strict']) end
+    ,fun (_) -> meck:unload('kapps_config') end
+    ,fun (_) ->
+             meck:expect('kapps_config', 'get_is_true', fun(<<"callflow">>, _Key, Default) -> Default end),
+             [{"neither system_config nor the account doc require owner validity: false"
+              ,?_assertNot(kz_attributes:should_check_validity_owner(kz_json:new(), 'false'))
+              }
+             ,{"account doc turns on plain owner validity checking"
+              ,?_assert(kz_attributes:should_check_validity_owner(kzd_accounts:set_caller_id_options_ensure_valid_owner(kz_json:new(), 'true'), 'false'))
+              }
+             ,{"account doc turns on passthrough owner validity checking"
+              ,?_assert(kz_attributes:should_check_validity_owner(kzd_accounts:set_caller_id_options_passthrough_ensure_valid_owner(kz_json:new(), 'true'), 'true'))
+              }
+             ]
+     end
+    }.

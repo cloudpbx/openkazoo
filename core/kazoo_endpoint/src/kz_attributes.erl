@@ -24,6 +24,10 @@
 -export([maybe_get_account_default_number/4]).
 -export([maybe_prefix_cid/5]).
 -export([get_flags/2]).
+
+-ifdef(TEST).
+-export([should_check_validity/2, should_check_validity_owner/2]).
+-endif.
 -export([process_dynamic_flags/2
         ,process_dynamic_flags/3
         ]).
