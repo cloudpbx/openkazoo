@@ -25,6 +25,10 @@
 
 -export([handle/2]).
 
+-ifdef(TEST).
+-export([build_keys/1, match_regexps/2]).
+-endif.
+
 -include("callflow.hrl").
 
 %%------------------------------------------------------------------------------
