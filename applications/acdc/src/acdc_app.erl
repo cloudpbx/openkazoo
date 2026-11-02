@@ -17,6 +17,10 @@
 %% Application callbacks
 -export([start/2, stop/1]).
 
+-ifdef(TEST).
+-export([integration_modules/0]).
+-endif.
+
 %% Crossbar and blackhole modules ship with this application; register them so a
 %% default deployment loads their REST endpoints and websocket bindings.
 -define(INTEGRATION_MODULES
@@ -27,6 +31,11 @@
         ,{<<"bh_acdc_member">>, 'blackhole_maintenance', 'start_module'}
         ,{<<"bh_acdc_queue">>, 'blackhole_maintenance', 'start_module'}
         ]).
+
+-ifdef(TEST).
+-spec integration_modules() -> list().
+integration_modules() -> ?INTEGRATION_MODULES.
+-endif.
 
 %%==============================================================================
 %% Application callbacks
