@@ -15,6 +15,10 @@
         ,attachment_url/6
         ]).
 
+-ifdef(TEST).
+-export([publish_attachment_saved/1]).
+-endif.
+
 -include("kz_data.hrl").
 
 -define(KEY_STUB_ATTACHMENTS, <<"pvt_attachments">>).
