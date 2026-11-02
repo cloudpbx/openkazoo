@@ -10,6 +10,10 @@
 
 -export([handle_req/2]).
 
+-ifdef(TEST).
+-export([maybe_correct_shortdial_originate/2]).
+-endif.
+
 -include("stepswitch.hrl").
 -include_lib("kazoo_amqp/include/kapi_offnet_resource.hrl").
 -include_lib("kazoo/include/kz_api_literals.hrl").
