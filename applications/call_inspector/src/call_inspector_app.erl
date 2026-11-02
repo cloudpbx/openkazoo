@@ -11,9 +11,18 @@
 
 -export([start/2, stop/1]).
 
+-ifdef(TEST).
+-export([integration_modules/0]).
+-endif.
+
 %% The crossbar module for this application ships with it; register it so a
 %% default deployment loads its REST endpoint.
 -define(INTEGRATION_MODULES, [{'cb_call_inspector', 'crossbar_maintenance', 'start_module'}]).
+
+-ifdef(TEST).
+-spec integration_modules() -> list().
+integration_modules() -> ?INTEGRATION_MODULES.
+-endif.
 
 %%------------------------------------------------------------------------------
 %% @doc Implement the application start behaviour.
