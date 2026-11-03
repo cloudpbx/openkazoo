@@ -16,14 +16,14 @@ is_up_test_() ->
      }
     ,{"registry table started, node absent: is_up/1 answers false"
      ,{'setup', fun start_table/0, fun stop_table/1, fun(_) ->
-                                                              ?_assertEqual('false', kz_nodes:is_up('some_other_node@nowhere'))
-                                                      end}
+                                                             ?_assertEqual('false', kz_nodes:is_up('some_other_node@nowhere'))
+                                                     end}
      }
     ,{"registry table started, node present: is_up/1 answers true"
      ,{'setup', fun start_table/0, fun stop_table/1, fun(_) ->
-                                                              ets:insert('kz_nodes', #kz_node{node = node()}),
-                                                              ?_assertEqual('true', kz_nodes:is_up(node()))
-                                                      end}
+                                                             ets:insert('kz_nodes', #kz_node{node = node()}),
+                                                             ?_assertEqual('true', kz_nodes:is_up(node()))
+                                                     end}
      }
     ].
 
