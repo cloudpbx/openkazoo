@@ -13,8 +13,8 @@ publish_attachment_saved_test_() ->
     ,fun(_) ->
              [{"uses the explicit \"name\" field and handler key when present"
               ,fun() -> ?assertMatch(#{<<"Name">> := <<"recording.mp3">>, <<"Storage-Type">> := <<"s3">>}
-                                     ,captured_props(doc_with_name_and_handler())
-                                     )
+                                    ,captured_props(doc_with_name_and_handler())
+                                    )
                end
               }
              ,{"falls back to the first pvt_attachments key when \"name\" is absent"
@@ -35,10 +35,10 @@ doc_with_name_and_handler() ->
       ,{<<"pvt_account_db">>, <<"account%2Fac%2Fco%2Facct0000000000000000000000001">>}
       ,{<<"name">>, <<"recording.mp3">>}
       ,{<<"pvt_attachments">>, kz_json:from_list(
-                                  [{<<"recording.mp3">>, kz_json:from_list(
-                                                            [{<<"handler">>, kz_json:from_list([{<<"s3">>, kz_json:new()}])}]
-                                                           )}
-                                  ])
+                                 [{<<"recording.mp3">>, kz_json:from_list(
+                                                          [{<<"handler">>, kz_json:from_list([{<<"s3">>, kz_json:new()}])}]
+                                                         )}
+                                 ])
        }
       ]).
 
@@ -47,8 +47,8 @@ doc_without_name() ->
       [{<<"_id">>, <<"doc0000000000000000000000000002">>}
       ,{<<"pvt_account_db">>, <<"account%2Fac%2Fco%2Facct0000000000000000000000001">>}
       ,{<<"pvt_attachments">>, kz_json:from_list(
-                                  [{<<"recording.mp3">>, kz_json:new()}]
-                                 )
+                                 [{<<"recording.mp3">>, kz_json:new()}]
+                                )
        }
       ]).
 
