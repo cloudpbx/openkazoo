@@ -79,6 +79,16 @@ normalize_test_() ->
      || N <- [<<"+12234567890">>, <<"12234567890">>, <<"2234567890">>]
     ].
 
+%% Regression test for openkazoo/kazoo#9: normalize/1,2,3 used to hand an
+%% empty binary straight to the configured converter module, which is not a
+%% valid number and does not need normalizing. Each arity now short-circuits
+%% to <<>> instead.
+normalize_empty_binary_test_() ->
+    [?_assertEqual(<<>>, ?MODULE_TESTED:normalize(<<>>))
+    ,?_assertEqual(<<>>, ?MODULE_TESTED:normalize(<<>>, 'undefined'))
+    ,?_assertEqual(<<>>, ?MODULE_TESTED:normalize(<<>>, <<"account0000000000000000000000001">>))
+    ].
+
 to_npan_test_() ->
     [?_assertEqual(<<"2234567890">>, ?MODULE_TESTED:to_npan(N))
      || N <- [<<"+12234567890">>, <<"12234567890">>, <<"2234567890">>]
