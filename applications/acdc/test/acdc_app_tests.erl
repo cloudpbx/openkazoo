@@ -16,8 +16,8 @@ integration_modules_test_() ->
      }
      || Mod <- ExpectedCrossbar
     ] ++
-    [{"blackhole module " ++ kz_term:to_list(Mod) ++ " is registered via blackhole_maintenance:start_module"
-     ,?_assert(lists:member({Mod, 'blackhole_maintenance', 'start_module'}, Integrations))
-     }
-     || Mod <- ExpectedBlackhole
-    ].
+        [{"blackhole module " ++ kz_term:to_list(Mod) ++ " is registered via blackhole_maintenance:start_module"
+         ,?_assert(lists:member({Mod, 'blackhole_maintenance', 'start_module'}, Integrations))
+         }
+         || Mod <- ExpectedBlackhole
+        ].
