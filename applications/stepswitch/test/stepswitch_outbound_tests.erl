@@ -36,8 +36,8 @@ maybe_correct_shortdial_originate_test_() ->
 -spec offnet_req(kz_term:ne_binary()) -> kz_json:object().
 offnet_req(AppName) ->
     kz_json:from_list([{<<"Application-Name">>, AppName}
-                       ,{<<"Resource-Type">>, <<"originate">>}
-                       ]).
+                      ,{<<"Resource-Type">>, <<"originate">>}
+                      ]).
 
 setup() ->
     meck:new('kapps_config', ['non_strict']),
