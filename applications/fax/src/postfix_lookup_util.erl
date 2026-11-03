@@ -11,6 +11,10 @@
 -export([check_fax_domain/1]).
 -export([domain_from_email/1]).
 
+-ifdef(TEST).
+-export([trim_newline/1]).
+-endif.
+
 -include("fax.hrl").
 
 -define(TIMEOUT, 8 * ?MILLISECONDS_IN_SECOND).
