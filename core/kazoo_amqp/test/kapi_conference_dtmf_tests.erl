@@ -29,7 +29,7 @@ dtmf_v_test_() ->
     Valid = [{<<"Application-Name">>, <<"dtmf">>}
             ,{<<"Conference-ID">>, <<"conference0000000000000000000001">>}
             ,{<<"Digits">>, <<"123">>}
-             | kz_api:default_headers(<<"conference">>, <<"1.0.0">>)
+             | kz_api:default_headers(<<"conference">>, <<"command">>, <<"myapp">>, <<"1.0.0">>)
             ],
     [{"a well-formed dtmf command validates"
      ,?_assert(kapi_conference:dtmf_v(Valid))

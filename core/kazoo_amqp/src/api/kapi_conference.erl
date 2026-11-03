@@ -8,6 +8,10 @@
 -module(kapi_conference).
 
 -export([event/1, event_v/1]).
+
+-ifdef(TEST).
+-export([is_valid_dtmf/1]).
+-endif.
 -export([focus_queue_name/1]).
 -export([search_req/1, search_req_v/1]).
 -export([search_resp/1, search_resp_v/1]).
