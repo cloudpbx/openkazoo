@@ -17,6 +17,26 @@
 %% Application callbacks
 -export([start/2, stop/1]).
 
+-ifdef(TEST).
+-export([integration_modules/0]).
+-endif.
+
+%% Crossbar and blackhole modules ship with this application; register them so a
+%% default deployment loads their REST endpoints and websocket bindings.
+-define(INTEGRATION_MODULES
+       ,[{'cb_agents', 'crossbar_maintenance', 'start_module'}
+        ,{'cb_queues', 'crossbar_maintenance', 'start_module'}
+        ,{'cb_acdc_call_stats', 'crossbar_maintenance', 'start_module'}
+        ,{<<"bh_acdc_agent">>, 'blackhole_maintenance', 'start_module'}
+        ,{<<"bh_acdc_member">>, 'blackhole_maintenance', 'start_module'}
+        ,{<<"bh_acdc_queue">>, 'blackhole_maintenance', 'start_module'}
+        ]).
+
+-ifdef(TEST).
+-spec integration_modules() -> list().
+integration_modules() -> ?INTEGRATION_MODULES.
+-endif.
+
 %%==============================================================================
 %% Application callbacks
 %%==============================================================================
@@ -30,6 +50,7 @@ start(_StartType, _StartArgs) ->
     acdc_maintenance:register_views(),
     _ = kapps_maintenance:bind_and_register_views('acdc', 'acdc_maintenance', 'register_views'),
     _ = kapps_maintenance:bind({'refresh_account', <<"*">>}, 'acdc_maintenance', 'refresh_account'),
+    kz_module:application_integrations(?INTEGRATION_MODULES),
     acdc_sup:start_link().
 
 %%------------------------------------------------------------------------------
