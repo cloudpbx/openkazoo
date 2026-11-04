@@ -92,11 +92,11 @@ maybe_load_profile(#{auth_provider := #{profile_url := _ProfileURL} = Provider
                     ,access_token := AccessToken
                     } = Token) ->
     Options = [{'headers_as_is', 'true'}
-              ,{'ssl', [{'versions', ['tlsv1.2']}]}
+              ,{'ssl', [{'versions', ['tlsv1.2']} | kz_http:default_ssl_options()]}
               ],
     URL = kz_term:to_list(profile_url(Token)),
     Verb = profile_access_verb(Provider),
-    {'ok',{_,_, Host, _, _, _}} = kz_http_util:uri_parse(URL),
+    {'ok', _Scheme, Host, _Port, _Path} = kz_http_util:uri_parse(URL),
     Headers = [{<<"host">>, Host}
                | profile_authorization_headers(Token, AccessToken)
               ],
