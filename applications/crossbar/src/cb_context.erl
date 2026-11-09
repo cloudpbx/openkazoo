@@ -264,13 +264,24 @@ is_account_admin(Context) ->
     AuthAccountId = auth_account_id(Context),
     AuthUserId = auth_user_id(Context),
     lager:debug("checking if user ~s is account admin of ~s", [AuthAccountId, AuthUserId]),
-    case kzd_user:is_account_admin(AuthAccountId, AuthUserId) of
+    case is_account_api_token(Context)
+        orelse kzd_user:is_account_admin(AuthAccountId, AuthUserId)
+    of
         'true' ->
             lager:debug("the requestor is an account admin"),
             'true';
         'false' ->
             lager:debug("the requestor is an superduper admin"),
             'false'
+    end.
+
+%% kzd_user:is_account_admin/2 answers 'false' for "no user doc", not "not an
+%% admin"; stock forces api_auth tokens to admin (crossbar_util:get_priv_level/2).
+-spec is_account_api_token(context()) -> boolean().
+is_account_api_token(Context) ->
+    case auth_doc(Context) of
+        'undefined' -> 'false';
+        AuthDoc -> kz_json:get_ne_binary_value(<<"method">>, AuthDoc) =:= <<"cb_api_auth">>
     end.
 
 -spec auth_token_type(context()) -> 'x-auth-token' | 'basic' | 'oauth' | 'unknown'.
