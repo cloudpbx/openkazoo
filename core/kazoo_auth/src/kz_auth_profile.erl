@@ -231,6 +231,9 @@ maybe_add_user_identity(#{auth_provider := #{profile_identity_fields := Fields}
     end;
 maybe_add_user_identity(#{auth_provider := #{name := <<"kazoo">>}}=Token) ->
     Token;
+maybe_add_user_identity(#{auth_provider := #{profile_identity_field := _}} = Token) ->
+    lager:debug("no profile to read the user identity from"),
+    Token;
 maybe_add_user_identity(#{auth_provider := Provider} = Token) ->
     maybe_add_user_identity(Token#{auth_provider => Provider#{profile_identity_field => <<"sub">>}}).
 
@@ -250,6 +253,8 @@ maybe_add_display_name(#{auth_provider := #{profile_displayName_field := Field}
     end;
 maybe_add_display_name(#{auth_provider := #{name := <<"kazoo">>}}=Token) ->
     Token;
+maybe_add_display_name(#{auth_provider := #{profile_displayName_field := _}} = Token) ->
+    Token;
 maybe_add_display_name(#{auth_provider := Provider} = Token) ->
     maybe_add_display_name(Token#{auth_provider => Provider#{profile_displayName_field => <<"name">>}}).
 
@@ -268,6 +273,8 @@ maybe_add_photo_url(#{auth_provider := #{profile_photo_url_field := Field}
             Token#{photo_url => PhotoUrl}
     end;
 maybe_add_photo_url(#{auth_provider := #{name := <<"kazoo">>}}=Token) ->
+    Token;
+maybe_add_photo_url(#{auth_provider := #{profile_photo_url_field := _}} = Token) ->
     Token;
 maybe_add_photo_url(#{auth_provider := Provider} = Token) ->
     maybe_add_photo_url(Token#{auth_provider => Provider#{profile_photo_url_field => <<"picture">>}}).
