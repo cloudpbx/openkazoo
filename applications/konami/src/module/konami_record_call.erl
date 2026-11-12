@@ -19,6 +19,10 @@
 
 -include("konami.hrl").
 
+-define(STATE_KEY, <<"konami_record_call">>).
+%% kapps_call keeps the recorders it starts under this kvs key.
+-define(RECORDINGS_KEY, <<"recordings">>).
+
 -spec handle(kz_json:object(), kapps_call:call()) ->
           {'continue', kapps_call:call()}.
 handle(Data, Call) ->
@@ -34,14 +38,33 @@ handle(_Data, Call, <<"unmask">>) ->
     lager:debug("unmasking recording, see you on the other side"),
     kapps_call:unmask_recording(Call);
 handle(Data, Call, <<"start">>) ->
-    lager:debug("starting recording, see you on the other side"),
-    announce(<<"recording-start">>, Call),
-    kapps_call:start_recording(Data, Call);
+    case kapps_call:kvs_fetch(?STATE_KEY, Call) of
+        'recording' ->
+            lager:debug("already recording, ignoring start"),
+            Call;
+        _ ->
+            lager:debug("starting recording, see you on the other side"),
+            announce(<<"recording-start">>, Call),
+            maybe_mark_recording(Call, kapps_call:start_recording(Data, Call))
+    end;
 handle(_Data, Call, <<"stop">>) ->
-    _ = kapps_call:stop_recording(Call),
-    lager:debug("sent command to stop recording call"),
-    announce(<<"recording-stop">>, Call),
-    Call.
+    case kapps_call:kvs_fetch(?STATE_KEY, Call) of
+        'stopped' ->
+            lager:debug("not recording, ignoring stop"),
+            Call;
+        _ ->
+            Call1 = kapps_call:stop_recording(Call),
+            lager:debug("sent command to stop recording call"),
+            announce(<<"recording-stop">>, Call1),
+            kapps_call:kvs_store(?STATE_KEY, 'stopped', Call1)
+    end.
+
+-spec maybe_mark_recording(kapps_call:call(), kapps_call:call()) -> kapps_call:call().
+maybe_mark_recording(Before, After) ->
+    case kapps_call:kvs_fetch(?RECORDINGS_KEY, Before) =:= kapps_call:kvs_fetch(?RECORDINGS_KEY, After) of
+        'true' -> After;
+        'false' -> kapps_call:kvs_store(?STATE_KEY, 'recording', After)
+    end.
 
 %% `Leg: "Both"' reaches both parties in one command when ecallmgr's
 %% `is_bridged/1' is true at the moment the command runs (the common

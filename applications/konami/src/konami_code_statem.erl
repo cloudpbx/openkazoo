@@ -220,9 +220,11 @@ armed('info', {'timeout', Ref, 'digit_timeout'}, #state{b_digit_timeout_ref = Re
 
 -spec handle_event(any(), atom(), state()) -> kz_types:handle_fsm_ret(state()).
 handle_event(?EVENT(CallId, <<"metaflow_exe">>, Metaflow), StateName, #state{call=Call}=State) ->
-    _Pid = proc_lib:spawn('konami_code_exe', 'handle', [Metaflow, Call]),
+    _Pid = exec_metaflow(Metaflow, Call),
     lager:debug("recv metaflow exe request for ~s, processing in ~p", [CallId, _Pid]),
     {'next_state', StateName, State};
+handle_event({'call_kvs', KVs}, StateName, #state{call=Call}=State) ->
+    {'next_state', StateName, State#state{call=kapps_call:kvs_store_proplist(KVs, Call)}};
 handle_event(?EVENT(_CallId, <<"CHANNEL_ANSWER">>, Evt)
             ,StateName
             ,State
@@ -462,16 +464,25 @@ maybe_handle_bleg_code(#state{numbers=Ns
 -spec handle_number_metaflow(kapps_call:call(), kz_json:object(), kz_term:ne_binary()) -> 'ok'.
 handle_number_metaflow(Call, N, DTMFLeg) ->
     Metaflow = kz_json:set_values([{[<<"data">>, <<"dtmf_leg">>], DTMFLeg}], N),
-    _Pid = proc_lib:spawn('konami_code_exe', 'handle', [Metaflow, Call]),
+    _Pid = exec_metaflow(Metaflow, Call),
     ?WSD_NOTE(DTMFLeg, 'right', <<"executing number metaflow">>),
     lager:debug("number exe in ~p: ~p", [_Pid, Metaflow]).
 
 -spec handle_pattern_metaflow(kapps_call:call(), kz_json:object(), kz_term:ne_binary()) -> 'ok'.
 handle_pattern_metaflow(Call, P, DTMFLeg) ->
     Metaflow = kz_json:set_values([{[<<"data">>, <<"dtmf_leg">>], DTMFLeg}], P),
-    _Pid = proc_lib:spawn('konami_code_exe', 'handle', [Metaflow, Call]),
+    _Pid = exec_metaflow(Metaflow, Call),
     ?WSD_NOTE(DTMFLeg, 'right', <<"executing pattern metaflow">>),
     lager:debug("pattern exe in ~p: ~p", [_Pid, Metaflow]).
+
+%% Only the kvs comes back: the statem owns the call's ids and legs.
+-spec exec_metaflow(kz_json:object(), kapps_call:call()) -> pid().
+exec_metaflow(Metaflow, Call) ->
+    Statem = self(),
+    proc_lib:spawn(fun() ->
+                           Updated = konami_code_exe:handle(Metaflow, Call),
+                           gen_statem:cast(Statem, {'call_kvs', kapps_call:kvs_to_proplist(Updated)})
+                   end).
 
 -spec arm_aleg(state()) -> state().
 arm_aleg(#state{digit_timeout=Timeout}=State) ->
