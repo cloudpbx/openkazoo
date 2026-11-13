@@ -15,18 +15,12 @@
 
 -export([handle/2
         ,number_builder/1
-        ,call_state_keys/0
         ]).
 
 -include("konami.hrl").
 
--define(STATE_KEY, <<"konami_record_call">>).
-%% kapps_call keeps the recorders it starts under this kvs key.
+%% kapps_call keeps the recorders it starts under this kvs key, as a queue of {MediaName, Pid}.
 -define(RECORDINGS_KEY, <<"recordings">>).
-
-%% The kvs a newer statem on the same leg must inherit to keep control of the recording.
--spec call_state_keys() -> kz_term:ne_binaries().
-call_state_keys() -> [?STATE_KEY, ?RECORDINGS_KEY].
 
 -spec handle(kz_json:object(), kapps_call:call()) ->
           {'continue', kapps_call:call()}.
@@ -43,33 +37,39 @@ handle(_Data, Call, <<"unmask">>) ->
     lager:debug("unmasking recording, see you on the other side"),
     kapps_call:unmask_recording(Call);
 handle(Data, Call, <<"start">>) ->
-    case kapps_call:kvs_fetch(?STATE_KEY, Call) of
-        'recording' ->
+    case live_recorders(Call) of
+        [_|_] ->
             lager:debug("already recording, ignoring start"),
             Call;
-        _ ->
+        [] ->
             lager:debug("starting recording, see you on the other side"),
             announce(<<"recording-start">>, Call),
-            maybe_mark_recording(Call, kapps_call:start_recording(Data, Call))
+            kapps_call:start_recording(Data, track(Call, []))
     end;
 handle(_Data, Call, <<"stop">>) ->
-    case kapps_call:kvs_fetch(?STATE_KEY, Call) of
-        'stopped' ->
-            lager:debug("not recording, ignoring stop"),
-            Call;
-        _ ->
-            Call1 = kapps_call:stop_recording(Call),
-            lager:debug("sent command to stop recording call"),
-            announce(<<"recording-stop">>, Call1),
-            kapps_call:kvs_store(?STATE_KEY, 'stopped', Call1)
+    %% With no live recorder of ours, the stop names no recording and ecallmgr stops the channel's
+    %% current one, so a recording started some other way (the account's auto-recording) can still be stopped.
+    Call1 = kapps_call:stop_recording(track(Call, live_recorders(Call))),
+    lager:debug("sent command to stop recording call"),
+    announce(<<"recording-stop">>, Call1),
+    Call1.
+
+%% A recorder exits once its recording is stored, whoever stopped it: konami, its time
+%% limit, or another party. Stop drops the one it stops, so only the rest are checked here.
+-spec live_recorders(kapps_call:call()) -> [{kz_term:ne_binary(), pid()}].
+live_recorders(Call) ->
+    case kapps_call:kvs_fetch(?RECORDINGS_KEY, Call) of
+        'undefined' -> [];
+        Q -> [Ref || {_MediaName, Pid}=Ref <- queue:to_list(Q), is_live(Pid)]
     end.
 
--spec maybe_mark_recording(kapps_call:call(), kapps_call:call()) -> kapps_call:call().
-maybe_mark_recording(Before, After) ->
-    case kapps_call:kvs_fetch(?RECORDINGS_KEY, Before) =:= kapps_call:kvs_fetch(?RECORDINGS_KEY, After) of
-        'true' -> After;
-        'false' -> kapps_call:kvs_store(?STATE_KEY, 'recording', After)
-    end.
+-spec is_live(pid()) -> boolean().
+is_live(Pid) when node(Pid) =:= node() -> is_process_alive(Pid);
+is_live(Pid) -> 'true' =:= rpc:call(node(Pid), 'erlang', 'is_process_alive', [Pid], ?MILLISECONDS_IN_SECOND).
+
+-spec track(kapps_call:call(), [{kz_term:ne_binary(), pid()}]) -> kapps_call:call().
+track(Call, Recorders) ->
+    kapps_call:kvs_store(?RECORDINGS_KEY, queue:from_list(Recorders), Call).
 
 %% `Leg: "Both"' reaches both parties in one command when ecallmgr's
 %% `is_bridged/1' is true at the moment the command runs (the common
