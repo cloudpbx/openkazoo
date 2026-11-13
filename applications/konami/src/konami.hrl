@@ -15,5 +15,9 @@
 
 -define(WSD_ENABLED, kapps_config:get_is_true(?CONFIG_CAT, <<"webseq_enabled">>, 'false')).
 
+%% kapps_call kvs a newer statem on the same leg inherits from the one it replaces, and the only kvs a
+%% metaflow may change on its statem's call: the recorders record_call started.
+-define(INHERITED_KVS, [<<"recordings">>]).
+
 -define(KONAMI_HRL, 'true').
 -endif.

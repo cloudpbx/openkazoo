@@ -51,6 +51,7 @@
 
                ,call_id :: kz_term:api_ne_binary()
                ,other_leg :: kz_term:api_binary()
+               ,started_at = erlang:monotonic_time() :: integer()
                }).
 -type state() :: #state{}.
 
@@ -112,7 +113,7 @@ transfer_to(Call, Leg) ->
 %% @doc
 %% @end
 %%------------------------------------------------------------------------------
--spec init({kapps_call:call(), kz_json:object()}) -> {'ok', 'unarmed', state()}.
+-spec init({kapps_call:call(), kz_json:object()}) -> {'ok', 'unarmed', state(), [{'next_event', 'internal', 'take_over'}]}.
 init({Call, JObj}) ->
     ListenOn = listen_on(Call, JObj),
     AuthorizingId = kapps_call:authorizing_id(Call),
@@ -143,13 +144,18 @@ init({Call, JObj}) ->
                             ,call_id=kapps_call:call_id_direct(Call)
 
                             ,b_endpoint_id=BEndpointId
-                            }}.
+                            }
+    ,[{'next_event', 'internal', 'take_over'}]
+    }.
 
 -spec callback_mode() -> 'state_functions'.
 callback_mode() ->
     'state_functions'.
 
--spec unarmed(gen_statem:event_type(), any(), state()) -> kz_types:handle_fsm_ret(state()).
+-spec unarmed(gen_statem:event_type(), any(), state()) -> gen_statem:event_handler_result(atom()).
+unarmed('internal', 'take_over', State) ->
+    ask_older_to_hand_over(State),
+    {'next_state', 'unarmed', State};
 unarmed('cast', {'dtmf', CallId, BindingDigit}, #state{call_id=CallId
                                                       ,listen_on='a'
                                                       ,binding_digit=BindingDigit
@@ -192,7 +198,7 @@ unarmed('cast', Evt, State) ->
 unarmed('info', _, State) ->
     {'next_state', ?FUNCTION_NAME, State}.
 
--spec armed(gen_statem:event_type(), any(), state()) -> kz_types:handle_fsm_ret(state()).
+-spec armed(gen_statem:event_type(), any(), state()) -> gen_statem:event_handler_result(atom()).
 armed('cast', {'dtmf', CallId, DTMF}, #state{call_id=CallId
                                             ,a_leg_armed='true'
                                             }=State) ->
@@ -218,11 +224,17 @@ armed('info', {'timeout', Ref, 'digit_timeout'}, #state{b_digit_timeout_ref = Re
     ?WSD_NOTE(_OtherLeg, 'right', <<"disarming">>),
     {'next_state', 'unarmed', disarm_state(State), 'hibernate'}.
 
--spec handle_event(any(), atom(), state()) -> kz_types:handle_fsm_ret(state()).
+-spec handle_event(any(), atom(), state()) -> gen_statem:event_handler_result(atom()).
 handle_event(?EVENT(CallId, <<"metaflow_exe">>, Metaflow), StateName, #state{call=Call}=State) ->
-    _Pid = proc_lib:spawn('konami_code_exe', 'handle', [Metaflow, Call]),
+    _Pid = exec_metaflow(Metaflow, Call),
     lager:debug("recv metaflow exe request for ~s, processing in ~p", [CallId, _Pid]),
     {'next_state', StateName, State};
+handle_event({'call_kvs', Changes}, StateName, #state{call=Call}=State) ->
+    {'next_state', StateName, State#state{call=apply_kvs_changes(Changes, Call)}};
+handle_event({'hand_over', Newer, ControlQueue, StartedAt, CallId, ListenOn}, StateName, State) ->
+    maybe_hand_over(Newer, ControlQueue, StartedAt, CallId, ListenOn, StateName, State);
+handle_event({'handed_over', KVs}, StateName, #state{call=Call}=State) ->
+    {'next_state', StateName, State#state{call=kapps_call:kvs_store_proplist(KVs, Call)}};
 handle_event(?EVENT(_CallId, <<"CHANNEL_ANSWER">>, Evt)
             ,StateName
             ,State
@@ -295,6 +307,56 @@ format_status(#{state := #state{call_id=CallId
 %%%=============================================================================
 %%% Internal functions
 %%%=============================================================================
+
+%% A transfer gives the leg a new control queue and starts a new statem for it. Requests go to the
+%% oldest statem for the call, whose commands would go to the dead queue, so the older one hands its
+%% inherited kvs over and stops. Statems of one callflow (a callee's devices) share a control queue,
+%% so they leave each other alone. Casts, so two statems asking each other at once can't block.
+-spec ask_older_to_hand_over(state()) -> 'ok'.
+ask_older_to_hand_over(#state{call_id=CallId, listen_on=ListenOn, call=Call, started_at=StartedAt}) ->
+    Request = {'hand_over', self(), kapps_call:control_queue_direct(Call), StartedAt, CallId, ListenOn},
+    lists:foreach(fun(FSM) -> gen_statem:cast(FSM, Request) end
+                 ,[FSM || FSM <- konami_event_listener:fsms_for_callid(CallId), FSM =/= self()]
+                 ).
+
+-spec maybe_hand_over(pid(), kz_term:api_binary(), integer(), kz_term:ne_binary(), listen_on(), atom(), state()) ->
+          gen_statem:event_handler_result(atom()).
+maybe_hand_over(Newer, ControlQueue, StartedAt, CallId, ListenOn, _StateName
+               ,#state{call_id=CallId, listen_on=ListenOn, call=Call, started_at=Started}
+               ) when StartedAt > Started ->
+    case kapps_call:control_queue_direct(Call) of
+        ControlQueue -> 'keep_state_and_data';
+        _Moved ->
+            lager:debug("leg ~s moved to a newer statem, handing over and stopping", [CallId]),
+            gen_statem:cast(Newer, {'handed_over', inherited_kvs(Call)}),
+            {'stop', 'normal'}
+    end;
+maybe_hand_over(_Newer, _ControlQueue, _StartedAt, _CallId, _ListenOn, _StateName, _State) ->
+    'keep_state_and_data'.
+
+-spec inherited_kvs(kapps_call:call()) -> kz_term:proplist().
+inherited_kvs(Call) ->
+    [{Key, Value} || Key <- ?INHERITED_KVS,
+                     Value <- [kapps_call:kvs_fetch(Key, Call)],
+                     Value =/= 'undefined'
+    ].
+
+%% A metaflow runs on a copy of the call. Each inherited key it changed is applied only if the
+%% statem's value is still the one the metaflow started from: when two overlap, the one that
+%% finishes second doesn't overwrite the first with a stale copy.
+-spec apply_kvs_changes([{kz_term:ne_binary(), any(), any()}], kapps_call:call()) -> kapps_call:call().
+apply_kvs_changes(Changes, Call) ->
+    lists:foldl(fun({Key, Before, After}, C) ->
+                        case kapps_call:kvs_fetch(Key, C) of
+                            Before -> kapps_call:kvs_store(Key, After, C);
+                            _Changed ->
+                                lager:debug("~s changed while a metaflow ran, keeping the newer value", [Key]),
+                                C
+                        end
+                end
+               ,Call
+               ,Changes
+               ).
 
 %%------------------------------------------------------------------------------
 %% @doc
@@ -462,16 +524,31 @@ maybe_handle_bleg_code(#state{numbers=Ns
 -spec handle_number_metaflow(kapps_call:call(), kz_json:object(), kz_term:ne_binary()) -> 'ok'.
 handle_number_metaflow(Call, N, DTMFLeg) ->
     Metaflow = kz_json:set_values([{[<<"data">>, <<"dtmf_leg">>], DTMFLeg}], N),
-    _Pid = proc_lib:spawn('konami_code_exe', 'handle', [Metaflow, Call]),
+    _Pid = exec_metaflow(Metaflow, Call),
     ?WSD_NOTE(DTMFLeg, 'right', <<"executing number metaflow">>),
     lager:debug("number exe in ~p: ~p", [_Pid, Metaflow]).
 
 -spec handle_pattern_metaflow(kapps_call:call(), kz_json:object(), kz_term:ne_binary()) -> 'ok'.
 handle_pattern_metaflow(Call, P, DTMFLeg) ->
     Metaflow = kz_json:set_values([{[<<"data">>, <<"dtmf_leg">>], DTMFLeg}], P),
-    _Pid = proc_lib:spawn('konami_code_exe', 'handle', [Metaflow, Call]),
+    _Pid = exec_metaflow(Metaflow, Call),
     ?WSD_NOTE(DTMFLeg, 'right', <<"executing pattern metaflow">>),
     lager:debug("pattern exe in ~p: ~p", [_Pid, Metaflow]).
+
+%% Only the inherited kvs come back: the statem owns the call's ids and legs.
+-spec exec_metaflow(kz_json:object(), kapps_call:call()) -> pid().
+exec_metaflow(Metaflow, Call) ->
+    Statem = self(),
+    proc_lib:spawn(fun() ->
+                           Updated = konami_code_exe:handle(Metaflow, Call),
+                           Changes = [{Key, Before, After}
+                                      || Key <- ?INHERITED_KVS,
+                                         Before <- [kapps_call:kvs_fetch(Key, Call)],
+                                         After <- [kapps_call:kvs_fetch(Key, Updated)],
+                                         Before =/= After
+                                     ],
+                           gen_statem:cast(Statem, {'call_kvs', Changes})
+                   end).
 
 -spec arm_aleg(state()) -> state().
 arm_aleg(#state{digit_timeout=Timeout}=State) ->
@@ -581,6 +658,16 @@ maybe_other_leg_answered(#state{listen_on='b'
                         ,EndpointId
                         ) ->
     lager:debug("ignoring channel -s answering for endpoint ~s", [CallId, EndpointId]),
+    State;
+%% Each of a callee's endpoints with metaflows gets its own 'b' statem: only its own endpoint's answer counts.
+maybe_other_leg_answered(#state{listen_on='b'
+                               ,b_endpoint_id=BEndpointId
+                               }=State
+                        ,_OtherLeg
+                        ,EndpointId
+                        ) when BEndpointId =/= 'undefined'
+                               andalso BEndpointId =/= EndpointId ->
+    lager:debug("ignoring endpoint ~s answering, listening for ~s", [EndpointId, BEndpointId]),
     State;
 maybe_other_leg_answered(#state{listen_on='b'
                                ,call=Call

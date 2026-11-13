@@ -19,6 +19,9 @@
 
 -include("konami.hrl").
 
+%% kapps_call keeps the recorders it starts under this kvs key, as a queue of {MediaName, Pid}.
+-define(RECORDINGS_KEY, <<"recordings">>).
+
 -spec handle(kz_json:object(), kapps_call:call()) ->
           {'continue', kapps_call:call()}.
 handle(Data, Call) ->
@@ -34,14 +37,39 @@ handle(_Data, Call, <<"unmask">>) ->
     lager:debug("unmasking recording, see you on the other side"),
     kapps_call:unmask_recording(Call);
 handle(Data, Call, <<"start">>) ->
-    lager:debug("starting recording, see you on the other side"),
-    announce(<<"recording-start">>, Call),
-    kapps_call:start_recording(Data, Call);
+    case live_recorders(Call) of
+        [_|_] ->
+            lager:debug("already recording, ignoring start"),
+            Call;
+        [] ->
+            lager:debug("starting recording, see you on the other side"),
+            announce(<<"recording-start">>, Call),
+            kapps_call:start_recording(Data, track(Call, []))
+    end;
 handle(_Data, Call, <<"stop">>) ->
-    _ = kapps_call:stop_recording(Call),
+    %% With no live recorder of ours, the stop names no recording and ecallmgr stops the channel's
+    %% current one, so a recording started some other way (the account's auto-recording) can still be stopped.
+    Call1 = kapps_call:stop_recording(track(Call, live_recorders(Call))),
     lager:debug("sent command to stop recording call"),
-    announce(<<"recording-stop">>, Call),
-    Call.
+    announce(<<"recording-stop">>, Call1),
+    Call1.
+
+%% A recorder exits once its recording is stored, whoever stopped it: konami, its time
+%% limit, or another party. Stop drops the one it stops, so only the rest are checked here.
+-spec live_recorders(kapps_call:call()) -> [{kz_term:ne_binary(), pid()}].
+live_recorders(Call) ->
+    case kapps_call:kvs_fetch(?RECORDINGS_KEY, Call) of
+        'undefined' -> [];
+        Q -> [Ref || {_MediaName, Pid}=Ref <- queue:to_list(Q), is_live(Pid)]
+    end.
+
+-spec is_live(pid()) -> boolean().
+is_live(Pid) when node(Pid) =:= node() -> is_process_alive(Pid);
+is_live(Pid) -> 'true' =:= rpc:call(node(Pid), 'erlang', 'is_process_alive', [Pid], ?MILLISECONDS_IN_SECOND).
+
+-spec track(kapps_call:call(), [{kz_term:ne_binary(), pid()}]) -> kapps_call:call().
+track(Call, Recorders) ->
+    kapps_call:kvs_store(?RECORDINGS_KEY, queue:from_list(Recorders), Call).
 
 %% `Leg: "Both"' reaches both parties in one command when ecallmgr's
 %% `is_bridged/1' is true at the moment the command runs (the common
