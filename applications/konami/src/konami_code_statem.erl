@@ -112,7 +112,7 @@ transfer_to(Call, Leg) ->
 %% @doc
 %% @end
 %%------------------------------------------------------------------------------
--spec init({kapps_call:call(), kz_json:object()}) -> {'ok', 'unarmed', state()}.
+-spec init({kapps_call:call(), kz_json:object()}) -> {'ok', 'unarmed', state(), [{'next_event', 'internal', 'take_over'}]}.
 init({Call, JObj}) ->
     ListenOn = listen_on(Call, JObj),
     AuthorizingId = kapps_call:authorizing_id(Call),
@@ -143,13 +143,19 @@ init({Call, JObj}) ->
                             ,call_id=kapps_call:call_id_direct(Call)
 
                             ,b_endpoint_id=BEndpointId
-                            }}.
+                            }
+    ,[{'next_event', 'internal', 'take_over'}]
+    }.
 
 -spec callback_mode() -> 'state_functions'.
 callback_mode() ->
     'state_functions'.
 
 -spec unarmed(gen_statem:event_type(), any(), state()) -> kz_types:handle_fsm_ret(state()).
+unarmed('internal', 'take_over', State) ->
+    {'next_state', 'unarmed', take_over(State)};
+unarmed({'call', From}, {'hand_over', CallId, ListenOn}, State) ->
+    hand_over(From, CallId, ListenOn, State);
 unarmed('cast', {'dtmf', CallId, BindingDigit}, #state{call_id=CallId
                                                       ,listen_on='a'
                                                       ,binding_digit=BindingDigit
@@ -193,6 +199,8 @@ unarmed('info', _, State) ->
     {'next_state', ?FUNCTION_NAME, State}.
 
 -spec armed(gen_statem:event_type(), any(), state()) -> kz_types:handle_fsm_ret(state()).
+armed({'call', From}, {'hand_over', CallId, ListenOn}, State) ->
+    hand_over(From, CallId, ListenOn, State);
 armed('cast', {'dtmf', CallId, DTMF}, #state{call_id=CallId
                                             ,a_leg_armed='true'
                                             }=State) ->
@@ -297,6 +305,31 @@ format_status(#{state := #state{call_id=CallId
 %%%=============================================================================
 %%% Internal functions
 %%%=============================================================================
+
+%% A transfer starts a new statem on the same leg, with the leg's new control queue. Requests go to the
+%% oldest statem, whose commands would go to the dead queue, so older ones hand their recording state over and stop.
+-spec take_over(state()) -> state().
+take_over(#state{call_id=CallId, listen_on=ListenOn, call=Call}=State) ->
+    Older = [FSM || FSM <- konami_event_listener:fsms_for_callid(CallId), FSM =/= self()],
+    KVs = lists:append([request_hand_over(FSM, CallId, ListenOn) || FSM <- Older]),
+    State#state{call=kapps_call:kvs_store_proplist(KVs, Call)}.
+
+-spec request_hand_over(pid(), kz_term:ne_binary(), listen_on()) -> kz_term:proplist().
+request_hand_over(FSM, CallId, ListenOn) ->
+    try gen_statem:call(FSM, {'hand_over', CallId, ListenOn}, 2 * ?MILLISECONDS_IN_SECOND)
+    catch _:_ -> []
+    end.
+
+-spec hand_over(gen_statem:from(), kz_term:ne_binary(), listen_on(), state()) -> kz_types:handle_fsm_ret(state()).
+hand_over(From, CallId, ListenOn, #state{call_id=CallId, listen_on=ListenOn, call=Call}) ->
+    lager:debug("newer statem took over '~s' leg of ~s, stopping", [ListenOn, CallId]),
+    KVs = [{Key, Value} || Key <- konami_record_call:call_state_keys(),
+                           Value <- [kapps_call:kvs_fetch(Key, Call)],
+                           Value =/= 'undefined'
+          ],
+    {'stop_and_reply', 'normal', [{'reply', From, KVs}]};
+hand_over(From, _CallId, _ListenOn, _State) ->
+    {'keep_state_and_data', [{'reply', From, []}]}.
 
 %%------------------------------------------------------------------------------
 %% @doc

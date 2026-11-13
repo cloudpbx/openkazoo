@@ -15,6 +15,7 @@
 
 -export([handle/2
         ,number_builder/1
+        ,call_state_keys/0
         ]).
 
 -include("konami.hrl").
@@ -22,6 +23,10 @@
 -define(STATE_KEY, <<"konami_record_call">>).
 %% kapps_call keeps the recorders it starts under this kvs key.
 -define(RECORDINGS_KEY, <<"recordings">>).
+
+%% The kvs a newer statem on the same leg must inherit to keep control of the recording.
+-spec call_state_keys() -> kz_term:ne_binaries().
+call_state_keys() -> [?STATE_KEY, ?RECORDINGS_KEY].
 
 -spec handle(kz_json:object(), kapps_call:call()) ->
           {'continue', kapps_call:call()}.
