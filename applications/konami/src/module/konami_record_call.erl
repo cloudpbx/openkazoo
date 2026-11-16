@@ -19,9 +19,6 @@
 
 -include("konami.hrl").
 
-%% kapps_call keeps the recorders it starts under this kvs key, as a queue of {MediaName, Pid}.
--define(RECORDINGS_KEY, <<"recordings">>).
-
 -spec handle(kz_json:object(), kapps_call:call()) ->
           {'continue', kapps_call:call()}.
 handle(Data, Call) ->
@@ -58,18 +55,21 @@ handle(_Data, Call, <<"stop">>) ->
 %% limit, or another party. Stop drops the one it stops, so only the rest are checked here.
 -spec live_recorders(kapps_call:call()) -> [{kz_term:ne_binary(), pid()}].
 live_recorders(Call) ->
-    case kapps_call:kvs_fetch(?RECORDINGS_KEY, Call) of
-        'undefined' -> [];
-        Q -> [Ref || {_MediaName, Pid}=Ref <- queue:to_list(Q), is_live(Pid)]
-    end.
+    [Ref || {_MediaName, Pid}=Ref <- queue:to_list(kapps_call:get_recordings(Call)), is_live(Pid)].
 
 -spec is_live(pid()) -> boolean().
 is_live(Pid) when node(Pid) =:= node() -> is_process_alive(Pid);
-is_live(Pid) -> 'true' =:= rpc:call(node(Pid), 'erlang', 'is_process_alive', [Pid], ?MILLISECONDS_IN_SECOND).
+is_live(Pid) ->
+    case rpc:call(node(Pid), 'erlang', 'is_process_alive', [Pid], ?MILLISECONDS_IN_SECOND) of
+        IsAlive when is_boolean(IsAlive) -> IsAlive;
+        {'badrpc', 'nodedown'} -> 'false';
+        %% Unknown: a duplicate recording is worse than a skipped start.
+        {'badrpc', _Reason} -> 'true'
+    end.
 
 -spec track(kapps_call:call(), [{kz_term:ne_binary(), pid()}]) -> kapps_call:call().
 track(Call, Recorders) ->
-    kapps_call:kvs_store(?RECORDINGS_KEY, queue:from_list(Recorders), Call).
+    kapps_call:set_recordings(queue:from_list(Recorders), Call).
 
 %% `Leg: "Both"' reaches both parties in one command when ecallmgr's
 %% `is_bridged/1' is true at the moment the command runs (the common

@@ -138,7 +138,10 @@ add_konami_binding(CallId) ->
 -spec rm_konami_binding(kz_term:api_binary()) -> 'ok'.
 rm_konami_binding('undefined') -> 'ok';
 rm_konami_binding(<<_/binary>> = CallId) ->
-    gen_listener:rm_binding(?SERVER, ?KONAMI_BINDINGS(CallId)).
+    case call_has_listeners(CallId) of
+        'true' -> 'ok';
+        'false' -> gen_listener:rm_binding(?SERVER, ?KONAMI_BINDINGS(CallId))
+    end.
 
 -spec add_call_binding(kz_term:api_ne_binary() | kapps_call:call()) -> 'ok'.
 add_call_binding('undefined') -> 'ok';
