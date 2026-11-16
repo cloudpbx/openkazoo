@@ -19,6 +19,7 @@
         ,originate/1
 
         ,fsms/0, fsms_for_callid/1, metaflows/0
+        ,recordings_on/1
         ]).
 
 -export([init/1
@@ -74,7 +75,13 @@
                              ,<<"CHANNEL_REPLACED">>
                              ,<<"CHANNEL_TRANSFEREE">>
                              ,<<"DTMF">>
+                             ,<<"RECORD_START">>
+                             ,<<"RECORD_STOP">>
                              ]).
+
+%% The recordings running on each leg konami tracks, whoever started them (konami, or the account's or
+%% endpoint's auto-recording): {CallId, RecordingPath}.
+-define(RECORDINGS, 'konami_recordings').
 
 -define(DYN_BINDINGS(CallId), 'call', [{'restrict_to', ?TRACKED_CALL_EVENTS}
                                       ,{'callid', CallId}
@@ -214,14 +221,33 @@ handle_call_event(JObj, Props) ->
 
 handle_call_event(JObj, _Props, <<"CHANNEL_DESTROY">> = Event) ->
     CallId = kz_call_event:call_id(JObj),
+    _ = ets:delete(?RECORDINGS, CallId),
     _ = relay_to_pids(CallId, JObj),
     _ = relay_to_fsms(CallId, Event, JObj),
     rm_call_binding(CallId);
 handle_call_event(JObj, _Props, Event) ->
     CallId = kz_call_event:call_id(JObj),
+    track_recording(Event, CallId, kz_call_event:application_response(JObj)),
 
     _ = relay_to_fsms(CallId, Event, JObj),
     relay_to_pids(CallId, JObj).
+
+-spec track_recording(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:api_binary()) -> 'ok'.
+track_recording(_Event, _CallId, 'undefined') -> 'ok';
+track_recording(<<"RECORD_START">>, CallId, Path) ->
+    lager:debug("recording ~s started on ~s", [Path, CallId]),
+    'true' = ets:insert(?RECORDINGS, {CallId, Path}),
+    'ok';
+track_recording(<<"RECORD_STOP">>, CallId, Path) ->
+    lager:debug("recording ~s stopped on ~s", [Path, CallId]),
+    'true' = ets:delete_object(?RECORDINGS, {CallId, Path}),
+    'ok';
+track_recording(_Event, _CallId, _Path) -> 'ok'.
+
+%% The recordings running on these legs, as {CallId, RecordingPath}.
+-spec recordings_on(kz_term:api_binaries()) -> [{kz_term:ne_binary(), kz_term:ne_binary()}].
+recordings_on(CallIds) ->
+    lists:append([ets:lookup(?RECORDINGS, CallId) || CallId <- CallIds, is_binary(CallId)]).
 
 -spec handle_originate_event(kz_json:object(), kz_term:proplist()) -> any().
 handle_originate_event(JObj, _Props) ->
@@ -316,6 +342,7 @@ originate(Req) ->
 %%------------------------------------------------------------------------------
 -spec init([]) -> {'ok', state()}.
 init([]) ->
+    _ = ets:new(?RECORDINGS, ['named_table', 'public', 'bag']),
     {'ok', #state{cleanup_ref=cleanup_timer()}}.
 
 cleanup_timer() ->
