@@ -79,8 +79,7 @@
                              ,<<"RECORD_STOP">>
                              ]).
 
-%% The recordings running on each leg konami tracks, whoever started them (konami, or the account's or
-%% endpoint's auto-recording): {CallId, RecordingPath}.
+%% The recordings running on each leg konami tracks, whoever started them: see ?CALL_RECORDINGS_KEY.
 -define(RECORDINGS, 'konami_recordings').
 
 -define(DYN_BINDINGS(CallId), 'call', [{'restrict_to', ?TRACKED_CALL_EVENTS}
@@ -209,6 +208,9 @@ really_remove_call_bindings(CallId) ->
 
 -spec really_remove_call_bindings(kz_term:ne_binary(), kz_term:ne_binaries()) -> 'ok'.
 really_remove_call_bindings(CallId, Events) ->
+    %% Untracked from here: a row left behind would read as recording for the rest of the call.
+    _ = lists:member(<<"RECORD_STOP">>, Events)
+        andalso ets:delete(?RECORDINGS, CallId),
     gen_listener:rm_binding(?SERVER, ?DYN_BINDINGS(CallId, Events)),
     gen_listener:rm_binding(?SERVER, ?META_BINDINGS(CallId)).
 
@@ -236,15 +238,14 @@ handle_call_event(JObj, _Props, Event) ->
 track_recording(_Event, _CallId, 'undefined') -> 'ok';
 track_recording(<<"RECORD_START">>, CallId, Path) ->
     lager:debug("recording ~s started on ~s", [Path, CallId]),
-    'true' = ets:insert(?RECORDINGS, {CallId, Path}),
+    ets:insert(?RECORDINGS, {CallId, Path}),
     'ok';
 track_recording(<<"RECORD_STOP">>, CallId, Path) ->
     lager:debug("recording ~s stopped on ~s", [Path, CallId]),
-    'true' = ets:delete_object(?RECORDINGS, {CallId, Path}),
+    ets:delete_object(?RECORDINGS, {CallId, Path}),
     'ok';
 track_recording(_Event, _CallId, _Path) -> 'ok'.
 
-%% The recordings running on these legs, as {CallId, RecordingPath}.
 -spec recordings_on(kz_term:api_binaries()) -> [{kz_term:ne_binary(), kz_term:ne_binary()}].
 recordings_on(CallIds) ->
     lists:append([ets:lookup(?RECORDINGS, CallId) || CallId <- CallIds, is_binary(CallId)]).
@@ -308,8 +309,10 @@ metaflows() ->
 
 -spec relay_to_fsm(kz_term:ne_binary(), kz_term:ne_binary(), kz_json:object()) -> any().
 relay_to_fsm(CallId, Event, JObj) ->
-    [FSM | _] = fsms_for_callid(CallId),
-    konami_code_statem:event(FSM, CallId, Event, JObj).
+    case fsms_for_callid(CallId) of
+        [FSM | _] -> konami_code_statem:event(FSM, CallId, Event, JObj);
+        [] -> lager:debug("no konami statem for ~s, dropping ~s", [CallId, Event])
+    end.
 
 -spec relay_to_pids(kz_term:ne_binary(), kz_json:object()) -> any().
 relay_to_pids(CallId, JObj) ->

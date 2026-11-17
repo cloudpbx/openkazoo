@@ -226,7 +226,10 @@ armed('info', {'timeout', Ref, 'digit_timeout'}, #state{b_digit_timeout_ref = Re
     lager:debug("disarming 'b' leg"),
     State1 = maybe_handle_bleg_code(State),
     ?WSD_NOTE(_OtherLeg, 'right', <<"disarming">>),
-    {'next_state', 'unarmed', disarm_state(State1), 'hibernate'}.
+    {'next_state', 'unarmed', disarm_state(State1), 'hibernate'};
+%% The other leg's events (bound for its recordings), and a stale digit timeout.
+armed('info', _, _State) ->
+    'keep_state_and_data'.
 
 %% Handed over but metaflows it started are still running: forward their recordings and new
 %% metaflow requests to the successor, act on nothing else, and stop once they're all done.

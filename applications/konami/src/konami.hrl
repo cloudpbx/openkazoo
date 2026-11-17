@@ -15,7 +15,8 @@
 
 -define(WSD_ENABLED, kapps_config:get_is_true(?CONFIG_CAT, <<"webseq_enabled">>, 'false')).
 
-%% The recordings running on the call's legs when a metaflow starts, whoever started them: {CallId, Path}.
+%% The recordings running on the call's legs when a metaflow starts, whoever started them (konami, or the
+%% account's or endpoint's auto-recording): {CallId, RecordingPath}.
 -define(CALL_RECORDINGS_KEY, <<"konami_call_recordings">>).
 -define(RECORDING_EVENTS, [<<"RECORD_START">>, <<"RECORD_STOP">>, <<"CHANNEL_DESTROY">>]).
 

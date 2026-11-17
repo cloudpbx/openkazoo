@@ -34,7 +34,7 @@ handle(_Data, Call, <<"unmask">>) ->
     lager:debug("unmasking recording, see you on the other side"),
     kapps_call:unmask_recording(Call);
 handle(Data, Call, <<"start">>) ->
-    case live_recorders(Call) =:= [] andalso running(Call) =:= [] of
+    case running(Call) =:= [] andalso live_recorders(Call) =:= [] of
         'false' ->
             lager:debug("already recording, ignoring start"),
             Call;
@@ -46,8 +46,9 @@ handle(Data, Call, <<"start">>) ->
 handle(_Data, Call, <<"stop">>) ->
     Call1 = case running(Call) of
                 [] ->
-                    %% None seen (say, an event missed): the stop names no recording, and ecallmgr stops
-                    %% the channel's latest.
+                    %% None seen (say, an event missed): each leg's stop names no recording, and ecallmgr
+                    %% stops that leg's latest.
+                    stop_latest([kapps_call:other_leg_call_id(Call)], Call),
                     kapps_call:stop_recording(track(Call, live_recorders(Call)));
                 Running ->
                     stop_running(Running, Call),
@@ -77,14 +78,20 @@ stop_running(Running, Call) ->
                  ,Running
                  ),
     Seen = [CallId || {CallId, _Path} <- Running],
+    stop_latest([CallId
+                 || CallId <- [kapps_call:call_id_direct(Call), kapps_call:other_leg_call_id(Call)]
+                        ,not lists:member(CallId, Seen)
+                ]
+               ,Call
+               ).
+
+-spec stop_latest(kz_term:api_binaries(), kapps_call:call()) -> 'ok'.
+stop_latest(CallIds, Call) ->
     lists:foreach(fun(CallId) ->
                           lager:debug("stopping the latest recording on ~s, none seen there", [CallId]),
                           kapps_call_command:stop_record_call([], kapps_call:set_call_id(CallId, Call))
                   end
-                 ,[CallId || CallId <- [kapps_call:call_id_direct(Call), kapps_call:other_leg_call_id(Call)],
-                             is_binary(CallId),
-                             not lists:member(CallId, Seen)
-                  ]
+                 ,[CallId || CallId <- CallIds, is_binary(CallId)]
                  ).
 
 %% A recorder exits once its recording is stored, whoever stopped it: konami, its time
