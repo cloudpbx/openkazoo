@@ -235,8 +235,8 @@ armed('info', _, _State) ->
 %% metaflow requests to the successor, act on nothing else, and stop once they're all done.
 -spec handing_over(gen_statem:event_type(), any(), state()) -> gen_statem:event_handler_result(atom()).
 handing_over('cast', {'recordings', Metaflow, Added, Removed}, #state{successor=Successor
-                                                                    ,metaflows=Metaflows
-                                                                    }=State) ->
+                                                                     ,metaflows=Metaflows
+                                                                     }=State) ->
     gen_statem:cast(Successor, {'recordings', 'undefined', Added, Removed}),
     finish_hand_over(State#state{metaflows=lists:delete(Metaflow, Metaflows)});
 handing_over('cast', ?EVENT(_CallId, <<"metaflow_exe">>, _Metaflow)=Evt, #state{successor=Successor}) ->
@@ -253,8 +253,8 @@ handle_event(?EVENT(CallId, <<"metaflow_exe">>, Metaflow), StateName, #state{cal
     lager:debug("recv metaflow exe request for ~s, processing in ~p", [CallId, Pid]),
     {'next_state', StateName, track_metaflow(Pid, State)};
 handle_event({'recordings', Metaflow, Added, Removed}, StateName, #state{call=Call
-                                                                       ,metaflows=Metaflows
-                                                                       }=State) ->
+                                                                        ,metaflows=Metaflows
+                                                                        }=State) ->
     {'next_state', StateName, State#state{call=merge_recordings(Added, Removed, Call)
                                          ,metaflows=lists:delete(Metaflow, Metaflows)
                                          }};
