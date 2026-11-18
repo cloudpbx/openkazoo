@@ -136,6 +136,7 @@
         ,mask_recording/1, mask_recording/2
         ,unmask_recording/1, unmask_recording/2
         ,stop_recording/1
+        ,get_recordings/1, set_recordings/2
         ]).
 
 -export([is_recording/1, set_is_recording/2]).
@@ -1608,6 +1609,10 @@ get_recordings(Call) ->
         'undefined' -> queue:new();
         Q -> Q
     end.
+
+-spec set_recordings(queue:queue(), call()) -> call().
+set_recordings(Q, Call) ->
+    kvs_store(?RECORDINGS_KEY, Q, Call).
 
 -spec inception_type(call()) -> kz_term:ne_binary().
 inception_type(#kapps_call{inception='undefined'}) -> <<"onnet">>;

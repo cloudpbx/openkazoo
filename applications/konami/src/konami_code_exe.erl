@@ -10,9 +10,10 @@
 
 -include("konami.hrl").
 
--spec handle(kz_term:api_object(), kapps_call:call()) -> 'ok'.
-handle('undefined', _Call) ->
-    lager:debug("no metaflow to execute");
+-spec handle(kz_term:api_object(), kapps_call:call()) -> kapps_call:call().
+handle('undefined', Call) ->
+    lager:debug("no metaflow to execute"),
+    Call;
 handle(Metaflow, Call) ->
     kapps_call:put_callid(Call),
     M = kz_json:get_ne_binary_value(<<"module">>, Metaflow),
@@ -25,15 +26,18 @@ handle(Metaflow, Call) ->
         {'continue', Call1} ->
             lager:debug("continuing to default child from konami_~s", [M]),
             handle(find_child_metaflow('undefined', Metaflow), Call1);
-        {'stop', _Call1} ->
-            lager:debug("finished metaflow konami_~s", [M]);
-        'ok' -> 'ok';
+        {'stop', Call1} ->
+            lager:debug("finished metaflow konami_~s", [M]),
+            Call1;
+        'ok' -> Call;
         _Other ->
-            lager:debug("finished handling metaflow for konami_~s: ~p", [M, _Other])
+            lager:debug("finished handling metaflow for konami_~s: ~p", [M, _Other]),
+            Call
     catch
         _E:_R:ST ->
             lager:debug("failed to exe metaflow 'konami_~s': ~s: ~p", [M, _E, _R]),
-            kz_util:log_stacktrace(ST)
+            kz_util:log_stacktrace(ST),
+            Call
     end.
 
 -spec find_child_metaflow(kz_term:api_binary(), kz_json:object()) -> kz_term:api_object().

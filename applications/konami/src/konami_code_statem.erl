@@ -21,6 +21,7 @@
 
         ,unarmed/3
         ,armed/3
+        ,handing_over/3
 
         ,terminate/3
         ,code_change/4
@@ -51,7 +52,11 @@
 
                ,call_id :: kz_term:api_ne_binary()
                ,other_leg :: kz_term:api_binary()
+               ,started_at = erlang:monotonic_time() :: integer()
+               ,metaflows = [] :: [pid()]
+               ,successor :: pid() | 'undefined'
                }).
+-type recording_ref() :: {kz_term:ne_binary(), pid()}.
 -type state() :: #state{}.
 
 -define(WSD_ID, ?WSD_ENABLED
@@ -112,7 +117,7 @@ transfer_to(Call, Leg) ->
 %% @doc
 %% @end
 %%------------------------------------------------------------------------------
--spec init({kapps_call:call(), kz_json:object()}) -> {'ok', 'unarmed', state()}.
+-spec init({kapps_call:call(), kz_json:object()}) -> {'ok', 'unarmed', state(), [{'next_event', 'internal', 'take_over'}]}.
 init({Call, JObj}) ->
     ListenOn = listen_on(Call, JObj),
     AuthorizingId = kapps_call:authorizing_id(Call),
@@ -143,13 +148,18 @@ init({Call, JObj}) ->
                             ,call_id=kapps_call:call_id_direct(Call)
 
                             ,b_endpoint_id=BEndpointId
-                            }}.
+                            }
+    ,[{'next_event', 'internal', 'take_over'}]
+    }.
 
 -spec callback_mode() -> 'state_functions'.
 callback_mode() ->
     'state_functions'.
 
--spec unarmed(gen_statem:event_type(), any(), state()) -> kz_types:handle_fsm_ret(state()).
+-spec unarmed(gen_statem:event_type(), any(), state()) -> gen_statem:event_handler_result(atom()).
+unarmed('internal', 'take_over', State) ->
+    ask_older_to_hand_over(State),
+    {'next_state', 'unarmed', State};
 unarmed('cast', {'dtmf', CallId, BindingDigit}, #state{call_id=CallId
                                                       ,listen_on='a'
                                                       ,binding_digit=BindingDigit
@@ -192,7 +202,7 @@ unarmed('cast', Evt, State) ->
 unarmed('info', _, State) ->
     {'next_state', ?FUNCTION_NAME, State}.
 
--spec armed(gen_statem:event_type(), any(), state()) -> kz_types:handle_fsm_ret(state()).
+-spec armed(gen_statem:event_type(), any(), state()) -> gen_statem:event_handler_result(atom()).
 armed('cast', {'dtmf', CallId, DTMF}, #state{call_id=CallId
                                             ,a_leg_armed='true'
                                             }=State) ->
@@ -207,22 +217,46 @@ armed('info', {'timeout', Ref, 'digit_timeout'}, #state{a_digit_timeout_ref = Re
                                                        ,call_id=_CallId
                                                        }=State) ->
     lager:debug("disarming 'a' leg"),
-    _ = maybe_handle_aleg_code(State),
+    State1 = maybe_handle_aleg_code(State),
     ?WSD_NOTE(_CallId, 'right', <<"disarming">>),
-    {'next_state', 'unarmed', disarm_state(State), 'hibernate'};
+    {'next_state', 'unarmed', disarm_state(State1), 'hibernate'};
 armed('info', {'timeout', Ref, 'digit_timeout'}, #state{b_digit_timeout_ref = Ref
                                                        ,other_leg=_OtherLeg
                                                        }=State) ->
     lager:debug("disarming 'b' leg"),
-    _ = maybe_handle_bleg_code(State),
+    State1 = maybe_handle_bleg_code(State),
     ?WSD_NOTE(_OtherLeg, 'right', <<"disarming">>),
-    {'next_state', 'unarmed', disarm_state(State), 'hibernate'}.
+    {'next_state', 'unarmed', disarm_state(State1), 'hibernate'}.
 
--spec handle_event(any(), atom(), state()) -> kz_types:handle_fsm_ret(state()).
+%% Handed over but metaflows it started are still running: forward their recordings and new
+%% metaflow requests to the successor, act on nothing else, and stop once they're all done.
+-spec handing_over(gen_statem:event_type(), any(), state()) -> gen_statem:event_handler_result(atom()).
+handing_over('cast', {'recordings', Metaflow, Added, Removed}, #state{successor=Successor
+                                                                     ,metaflows=Metaflows
+                                                                     }=State) ->
+    gen_statem:cast(Successor, {'recordings', 'undefined', Added, Removed}),
+    finish_hand_over(State#state{metaflows=lists:delete(Metaflow, Metaflows)});
+handing_over('cast', ?EVENT(_CallId, <<"metaflow_exe">>, _Metaflow)=Evt, #state{successor=Successor}) ->
+    gen_statem:cast(Successor, Evt),
+    'keep_state_and_data';
+handing_over('cast', ?EVENT(CallId, <<"CHANNEL_DESTROY">>, _Evt), #state{call_id=CallId}) ->
+    {'stop', 'normal'};
+handing_over(_EventType, _Event, _State) ->
+    'keep_state_and_data'.
+
+-spec handle_event(any(), atom(), state()) -> gen_statem:event_handler_result(atom()).
 handle_event(?EVENT(CallId, <<"metaflow_exe">>, Metaflow), StateName, #state{call=Call}=State) ->
-    _Pid = proc_lib:spawn('konami_code_exe', 'handle', [Metaflow, Call]),
-    lager:debug("recv metaflow exe request for ~s, processing in ~p", [CallId, _Pid]),
-    {'next_state', StateName, State};
+    Pid = exec_metaflow(Metaflow, Call),
+    lager:debug("recv metaflow exe request for ~s, processing in ~p", [CallId, Pid]),
+    {'next_state', StateName, track_metaflow(Pid, State)};
+handle_event({'recordings', Metaflow, Added, Removed}, StateName, #state{call=Call
+                                                                        ,metaflows=Metaflows
+                                                                        }=State) ->
+    {'next_state', StateName, State#state{call=merge_recordings(Added, Removed, Call)
+                                         ,metaflows=lists:delete(Metaflow, Metaflows)
+                                         }};
+handle_event({'hand_over', Newer, ControlQueue, StartedAt, CallId, ListenOn}, _StateName, State) ->
+    maybe_hand_over(Newer, ControlQueue, StartedAt, CallId, ListenOn, State);
 handle_event(?EVENT(_CallId, <<"CHANNEL_ANSWER">>, Evt)
             ,StateName
             ,State
@@ -295,6 +329,54 @@ format_status(#{state := #state{call_id=CallId
 %%%=============================================================================
 %%% Internal functions
 %%%=============================================================================
+
+%% A transfer gives the leg a new control queue and starts a new statem for it. Requests go to the
+%% oldest statem for the call, whose commands would go to the dead queue, so the older one hands its
+%% recordings over and stops. Statems of one callflow (a callee's devices) share a control queue,
+%% so they leave each other alone. Casts, so two statems asking each other at once can't block.
+-spec ask_older_to_hand_over(state()) -> 'ok'.
+ask_older_to_hand_over(#state{call_id=CallId, listen_on=ListenOn, call=Call, started_at=StartedAt}) ->
+    Request = {'hand_over', self(), kapps_call:control_queue_direct(Call), StartedAt, CallId, ListenOn},
+    lists:foreach(fun(FSM) -> gen_statem:cast(FSM, Request) end
+                 ,[FSM || FSM <- konami_event_listener:fsms_for_callid(CallId), FSM =/= self()]
+                 ).
+
+-spec maybe_hand_over(pid(), kz_term:api_binary(), integer(), kz_term:ne_binary(), listen_on(), state()) ->
+          gen_statem:event_handler_result(atom()).
+maybe_hand_over(Newer, <<_/binary>> = ControlQueue, StartedAt, CallId, ListenOn
+               ,#state{call_id=CallId, listen_on=ListenOn, call=Call, started_at=Started}=State
+               ) when StartedAt > Started ->
+    case kapps_call:control_queue_direct(Call) of
+        ControlQueue -> 'keep_state_and_data';
+        _Moved ->
+            lager:debug("leg ~s moved to a newer statem, handing over", [CallId]),
+            gen_statem:cast(Newer, {'recordings', 'undefined', recordings(Call), []}),
+            finish_hand_over(disarm_state(State#state{successor=Newer}))
+    end;
+maybe_hand_over(_Newer, _ControlQueue, _StartedAt, _CallId, _ListenOn, _State) ->
+    'keep_state_and_data'.
+
+-spec finish_hand_over(state()) -> gen_statem:event_handler_result(atom()).
+finish_hand_over(#state{metaflows=[]}) ->
+    {'stop', 'normal'};
+finish_hand_over(#state{metaflows=Metaflows}=State) ->
+    lager:debug("waiting on ~p metaflows before stopping", [length(Metaflows)]),
+    {'next_state', 'handing_over', State}.
+
+-spec track_metaflow(pid(), state()) -> state().
+track_metaflow(Pid, #state{metaflows=Metaflows}=State) ->
+    State#state{metaflows=[Pid | Metaflows]}.
+
+-spec recordings(kapps_call:call()) -> [recording_ref()].
+recordings(Call) ->
+    queue:to_list(kapps_call:get_recordings(Call)).
+
+%% Metaflows run on copies of the call and can overlap, so each reports the recorders it added and
+%% removed rather than a snapshot, and recorders the statem already tracks aren't added twice.
+-spec merge_recordings([recording_ref()], [recording_ref()], kapps_call:call()) -> kapps_call:call().
+merge_recordings(Added, Removed, Call) ->
+    Kept = recordings(Call) -- Removed,
+    kapps_call:set_recordings(queue:from_list(Kept ++ (Added -- Kept)), Call).
 
 %%------------------------------------------------------------------------------
 %% @doc
@@ -431,47 +513,66 @@ maybe_cancel_timer(Ref) when is_reference(Ref) ->
     'ok';
 maybe_cancel_timer(_) -> 'ok'.
 
--spec maybe_handle_aleg_code(state()) -> 'ok'.
+-spec maybe_handle_aleg_code(state()) -> state().
 maybe_handle_aleg_code(#state{numbers=Ns
                              ,patterns=Ps
                              ,a_collected_dtmf = Collected
                              ,call=Call
                              ,call_id=CallId
-                             }) ->
+                             }=State) ->
     lager:debug("a DTMF timeout, let's check '~s'", [Collected]),
     case has_metaflow(Collected, Ns, Ps) of
-        'false' -> lager:debug("no handler for '~s', unarming", [Collected]);
-        {'number', N} -> handle_number_metaflow(Call, N, CallId);
-        {'pattern', P} -> handle_pattern_metaflow(Call, P, CallId)
+        'false' ->
+            lager:debug("no handler for '~s', unarming", [Collected]),
+            State;
+        {'number', N} -> track_metaflow(handle_number_metaflow(Call, N, CallId), State);
+        {'pattern', P} -> track_metaflow(handle_pattern_metaflow(Call, P, CallId), State)
     end.
 
--spec maybe_handle_bleg_code(state()) -> 'ok'.
+-spec maybe_handle_bleg_code(state()) -> state().
 maybe_handle_bleg_code(#state{numbers=Ns
                              ,patterns=Ps
                              ,b_collected_dtmf = Collected
                              ,call=Call
                              ,other_leg=OtherLeg
-                             }) ->
+                             }=State) ->
     lager:debug("b DTMF timeout, let's check '~s'", [Collected]),
     case has_metaflow(Collected, Ns, Ps) of
-        'false' -> lager:debug("no handler for '~s', unarming", [Collected]);
-        {'number', N} -> handle_number_metaflow(Call, N, OtherLeg);
-        {'pattern', P} -> handle_pattern_metaflow(Call, P, OtherLeg)
+        'false' ->
+            lager:debug("no handler for '~s', unarming", [Collected]),
+            State;
+        {'number', N} -> track_metaflow(handle_number_metaflow(Call, N, OtherLeg), State);
+        {'pattern', P} -> track_metaflow(handle_pattern_metaflow(Call, P, OtherLeg), State)
     end.
 
--spec handle_number_metaflow(kapps_call:call(), kz_json:object(), kz_term:ne_binary()) -> 'ok'.
+-spec handle_number_metaflow(kapps_call:call(), kz_json:object(), kz_term:ne_binary()) -> pid().
 handle_number_metaflow(Call, N, DTMFLeg) ->
     Metaflow = kz_json:set_values([{[<<"data">>, <<"dtmf_leg">>], DTMFLeg}], N),
-    _Pid = proc_lib:spawn('konami_code_exe', 'handle', [Metaflow, Call]),
+    Pid = exec_metaflow(Metaflow, Call),
     ?WSD_NOTE(DTMFLeg, 'right', <<"executing number metaflow">>),
-    lager:debug("number exe in ~p: ~p", [_Pid, Metaflow]).
+    lager:debug("number exe in ~p: ~p", [Pid, Metaflow]),
+    Pid.
 
--spec handle_pattern_metaflow(kapps_call:call(), kz_json:object(), kz_term:ne_binary()) -> 'ok'.
+-spec handle_pattern_metaflow(kapps_call:call(), kz_json:object(), kz_term:ne_binary()) -> pid().
 handle_pattern_metaflow(Call, P, DTMFLeg) ->
     Metaflow = kz_json:set_values([{[<<"data">>, <<"dtmf_leg">>], DTMFLeg}], P),
-    _Pid = proc_lib:spawn('konami_code_exe', 'handle', [Metaflow, Call]),
+    Pid = exec_metaflow(Metaflow, Call),
     ?WSD_NOTE(DTMFLeg, 'right', <<"executing pattern metaflow">>),
-    lager:debug("pattern exe in ~p: ~p", [_Pid, Metaflow]).
+    lager:debug("pattern exe in ~p: ~p", [Pid, Metaflow]),
+    Pid.
+
+%% Only the recordings come back: the statem owns the call's ids and legs. Always reports, so a
+%% statem handing over isn't left waiting on it.
+-spec exec_metaflow(kz_json:object(), kapps_call:call()) -> pid().
+exec_metaflow(Metaflow, Call) ->
+    Statem = self(),
+    Before = recordings(Call),
+    proc_lib:spawn(fun() ->
+                           After = try recordings(konami_code_exe:handle(Metaflow, Call))
+                                   catch _:_ -> Before
+                                   end,
+                           gen_statem:cast(Statem, {'recordings', self(), After -- Before, Before -- After})
+                   end).
 
 -spec arm_aleg(state()) -> state().
 arm_aleg(#state{digit_timeout=Timeout}=State) ->
@@ -581,6 +682,16 @@ maybe_other_leg_answered(#state{listen_on='b'
                         ,EndpointId
                         ) ->
     lager:debug("ignoring channel -s answering for endpoint ~s", [CallId, EndpointId]),
+    State;
+%% Each of a callee's endpoints with metaflows gets its own 'b' statem: only its own endpoint's answer counts.
+maybe_other_leg_answered(#state{listen_on='b'
+                               ,b_endpoint_id=BEndpointId
+                               }=State
+                        ,_OtherLeg
+                        ,EndpointId
+                        ) when BEndpointId =/= 'undefined'
+                               andalso BEndpointId =/= EndpointId ->
+    lager:debug("ignoring endpoint ~s answering, listening for ~s", [EndpointId, BEndpointId]),
     State;
 maybe_other_leg_answered(#state{listen_on='b'
                                ,call=Call
