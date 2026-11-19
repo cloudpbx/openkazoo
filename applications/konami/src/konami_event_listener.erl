@@ -432,13 +432,25 @@ code_change(_OldVsn, State, _Extra) ->
 -spec cleanup_bindings(kz_types:server_ref()) -> 'ok'.
 cleanup_bindings(Srv) ->
     kz_util:put_callid(?MODULE),
-    cleanup_bindings(Srv, gen_listener:bindings(Srv)).
+    cleanup_bindings(Srv, gen_listener:bindings(Srv)),
+    prune_recordings().
 
 -spec cleanup_bindings(kz_types:server_ref(), gen_listener:bindings()) -> 'ok'.
 cleanup_bindings(_Srv, []) -> 'ok';
 cleanup_bindings(Srv, [{Binding, Props}|Bindings]) ->
     maybe_remove_binding(Srv, Binding, Props, props:get_value('callid', Props)),
     cleanup_bindings(Srv, Bindings).
+
+%% A leg nothing listens to anymore can't see its RECORD_STOP, so its rows would read as recording.
+-spec prune_recordings() -> 'ok'.
+prune_recordings() ->
+    CallIds = lists:usort([CallId || {CallId, _Path} <- ets:tab2list(?RECORDINGS)]),
+    lists:foreach(fun(CallId) -> ets:delete(?RECORDINGS, CallId) end
+                 ,[CallId || CallId <- CallIds
+                                 ,fsms_for_callid(CallId) =:= []
+                                 ,pids_for_callid(CallId) =:= []
+                  ]
+                 ).
 
 -spec maybe_remove_binding(kz_types:server_ref(), atom(), kz_term:proplist(), kz_term:api_binary()) -> 'ok'.
 maybe_remove_binding(_Srv, _Binding, _Props, 'undefined') -> 'ok';
