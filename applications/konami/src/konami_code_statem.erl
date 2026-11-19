@@ -226,7 +226,10 @@ armed('info', {'timeout', Ref, 'digit_timeout'}, #state{b_digit_timeout_ref = Re
     lager:debug("disarming 'b' leg"),
     State1 = maybe_handle_bleg_code(State),
     ?WSD_NOTE(_OtherLeg, 'right', <<"disarming">>),
-    {'next_state', 'unarmed', disarm_state(State1), 'hibernate'}.
+    {'next_state', 'unarmed', disarm_state(State1), 'hibernate'};
+%% The other leg's events (bound for its recordings), and a stale digit timeout.
+armed('info', _, _State) ->
+    'keep_state_and_data'.
 
 %% Handed over but metaflows it started are still running: forward their recordings and new
 %% metaflow requests to the successor, act on nothing else, and stop once they're all done.
@@ -311,6 +314,7 @@ terminate(_Reason, _StateName, #state{call_id=CallId
                                      }) ->
     konami_event_listener:rm_call_binding(CallId),
     konami_event_listener:rm_call_binding(OtherLeg),
+    konami_event_listener:rm_call_binding(OtherLeg, ?RECORDING_EVENTS),
     konami_event_listener:rm_konami_binding(CallId),
     konami_event_listener:rm_konami_binding(OtherLeg),
     ?WSD_STOP(),
@@ -562,10 +566,15 @@ handle_pattern_metaflow(Call, P, DTMFLeg) ->
     Pid.
 
 %% Only the recordings come back: the statem owns the call's ids and legs. Always reports, so a
-%% statem handing over isn't left waiting on it.
+%% statem handing over isn't left waiting on it. The metaflow also gets the recordings running on both
+%% legs, whoever started them.
 -spec exec_metaflow(kz_json:object(), kapps_call:call()) -> pid().
-exec_metaflow(Metaflow, Call) ->
+exec_metaflow(Metaflow, Call0) ->
     Statem = self(),
+    Running = konami_event_listener:recordings_on([kapps_call:call_id_direct(Call0)
+                                                  ,kapps_call:other_leg_call_id(Call0)
+                                                  ]),
+    Call = kapps_call:kvs_store(?CALL_RECORDINGS_KEY, Running, Call0),
     Before = recordings(Call),
     proc_lib:spawn(fun() ->
                            After = try recordings(konami_code_exe:handle(Metaflow, Call))
@@ -714,6 +723,9 @@ handle_channel_bridge(#state{call_id=CallId
                             ,call=Call
                             }=State, CallId, OtherLeg) ->
     lager:debug("joy, 'a' is bridged to ~s", [OtherLeg]),
+    %% The answering endpoint's leg can be recorded too (the endpoint's auto-recording): track it, so a
+    %% stop reaches it.
+    konami_event_listener:add_call_binding(OtherLeg, ?RECORDING_EVENTS),
     State#state{call=kapps_call:set_other_leg_call_id(OtherLeg, Call)
                ,other_leg=OtherLeg
                };

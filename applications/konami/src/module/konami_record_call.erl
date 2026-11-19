@@ -34,22 +34,65 @@ handle(_Data, Call, <<"unmask">>) ->
     lager:debug("unmasking recording, see you on the other side"),
     kapps_call:unmask_recording(Call);
 handle(Data, Call, <<"start">>) ->
-    case live_recorders(Call) of
-        [_|_] ->
+    case running(Call) =:= [] andalso live_recorders(Call) =:= [] of
+        'false' ->
             lager:debug("already recording, ignoring start"),
             Call;
-        [] ->
+        'true' ->
             lager:debug("starting recording, see you on the other side"),
             announce(<<"recording-start">>, Call),
             kapps_call:start_recording(Data, track(Call, []))
     end;
 handle(_Data, Call, <<"stop">>) ->
-    %% With no live recorder of ours, the stop names no recording and ecallmgr stops the channel's
-    %% current one, so a recording started some other way (the account's auto-recording) can still be stopped.
-    Call1 = kapps_call:stop_recording(track(Call, live_recorders(Call))),
+    Call1 = case running(Call) of
+                [] ->
+                    %% None seen (say, an event missed): each leg's stop names no recording, and ecallmgr
+                    %% stops that leg's latest.
+                    stop_latest([kapps_call:other_leg_call_id(Call)], Call),
+                    kapps_call:stop_recording(track(Call, live_recorders(Call)));
+                Running ->
+                    stop_running(Running, Call),
+                    track(Call, [])
+            end,
     lager:debug("sent command to stop recording call"),
     announce(<<"recording-stop">>, Call1),
     Call1.
+
+%% Every recording running on the call's legs, whoever started it (the account's or the endpoint's
+%% auto-recording, or konami): a firm's settings record each leg, so one stop has to end them all.
+-spec running(kapps_call:call()) -> [{kz_term:ne_binary(), kz_term:ne_binary()}].
+running(Call) ->
+    kapps_call:kvs_fetch(?CALL_RECORDINGS_KEY, [], Call).
+
+%% Each by name, on its own leg: the call's control queue runs a command on a bridged leg when the
+%% command's Call-ID names it. A leg with none seen still gets a stop that names no recording (its
+%% latest): an endpoint's auto-recording starts on answer, which can beat konami's binding to that leg.
+-spec stop_running([{kz_term:ne_binary(), kz_term:ne_binary()}], kapps_call:call()) -> 'ok'.
+stop_running(Running, Call) ->
+    lists:foreach(fun({CallId, Path}) ->
+                          lager:debug("stopping recording ~s on ~s", [Path, CallId]),
+                          kapps_call_command:stop_record_call([{<<"Media-Name">>, Path}]
+                                                             ,kapps_call:set_call_id(CallId, Call)
+                                                             )
+                  end
+                 ,Running
+                 ),
+    Seen = [CallId || {CallId, _Path} <- Running],
+    stop_latest([CallId
+                 || CallId <- [kapps_call:call_id_direct(Call), kapps_call:other_leg_call_id(Call)]
+                        ,not lists:member(CallId, Seen)
+                ]
+               ,Call
+               ).
+
+-spec stop_latest(kz_term:api_binaries(), kapps_call:call()) -> 'ok'.
+stop_latest(CallIds, Call) ->
+    lists:foreach(fun(CallId) ->
+                          lager:debug("stopping the latest recording on ~s, none seen there", [CallId]),
+                          kapps_call_command:stop_record_call([], kapps_call:set_call_id(CallId, Call))
+                  end
+                 ,[CallId || CallId <- CallIds, is_binary(CallId)]
+                 ).
 
 %% A recorder exits once its recording is stored, whoever stopped it: konami, its time
 %% limit, or another party. Stop drops the one it stops, so only the rest are checked here.

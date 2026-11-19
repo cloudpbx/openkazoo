@@ -19,6 +19,7 @@
         ,originate/1
 
         ,fsms/0, fsms_for_callid/1, metaflows/0
+        ,recordings_on/1
         ]).
 
 -export([init/1
@@ -74,7 +75,12 @@
                              ,<<"CHANNEL_REPLACED">>
                              ,<<"CHANNEL_TRANSFEREE">>
                              ,<<"DTMF">>
+                             ,<<"RECORD_START">>
+                             ,<<"RECORD_STOP">>
                              ]).
+
+%% The recordings running on each leg konami tracks, whoever started them: see ?CALL_RECORDINGS_KEY.
+-define(RECORDINGS, 'konami_recordings').
 
 -define(DYN_BINDINGS(CallId), 'call', [{'restrict_to', ?TRACKED_CALL_EVENTS}
                                       ,{'callid', CallId}
@@ -202,6 +208,9 @@ really_remove_call_bindings(CallId) ->
 
 -spec really_remove_call_bindings(kz_term:ne_binary(), kz_term:ne_binaries()) -> 'ok'.
 really_remove_call_bindings(CallId, Events) ->
+    %% Untracked from here: a row left behind would read as recording for the rest of the call.
+    _ = lists:member(<<"RECORD_STOP">>, Events)
+        andalso ets:delete(?RECORDINGS, CallId),
     gen_listener:rm_binding(?SERVER, ?DYN_BINDINGS(CallId, Events)),
     gen_listener:rm_binding(?SERVER, ?META_BINDINGS(CallId)).
 
@@ -214,14 +223,32 @@ handle_call_event(JObj, Props) ->
 
 handle_call_event(JObj, _Props, <<"CHANNEL_DESTROY">> = Event) ->
     CallId = kz_call_event:call_id(JObj),
+    _ = ets:delete(?RECORDINGS, CallId),
     _ = relay_to_pids(CallId, JObj),
     _ = relay_to_fsms(CallId, Event, JObj),
     rm_call_binding(CallId);
 handle_call_event(JObj, _Props, Event) ->
     CallId = kz_call_event:call_id(JObj),
+    track_recording(Event, CallId, kz_call_event:application_response(JObj)),
 
     _ = relay_to_fsms(CallId, Event, JObj),
     relay_to_pids(CallId, JObj).
+
+-spec track_recording(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:api_binary()) -> 'ok'.
+track_recording(_Event, _CallId, 'undefined') -> 'ok';
+track_recording(<<"RECORD_START">>, CallId, Path) ->
+    lager:debug("recording ~s started on ~s", [Path, CallId]),
+    ets:insert(?RECORDINGS, {CallId, Path}),
+    'ok';
+track_recording(<<"RECORD_STOP">>, CallId, Path) ->
+    lager:debug("recording ~s stopped on ~s", [Path, CallId]),
+    ets:delete_object(?RECORDINGS, {CallId, Path}),
+    'ok';
+track_recording(_Event, _CallId, _Path) -> 'ok'.
+
+-spec recordings_on(kz_term:api_binaries()) -> [{kz_term:ne_binary(), kz_term:ne_binary()}].
+recordings_on(CallIds) ->
+    lists:append([ets:lookup(?RECORDINGS, CallId) || CallId <- CallIds, is_binary(CallId)]).
 
 -spec handle_originate_event(kz_json:object(), kz_term:proplist()) -> any().
 handle_originate_event(JObj, _Props) ->
@@ -282,8 +309,10 @@ metaflows() ->
 
 -spec relay_to_fsm(kz_term:ne_binary(), kz_term:ne_binary(), kz_json:object()) -> any().
 relay_to_fsm(CallId, Event, JObj) ->
-    [FSM | _] = fsms_for_callid(CallId),
-    konami_code_statem:event(FSM, CallId, Event, JObj).
+    case fsms_for_callid(CallId) of
+        [FSM | _] -> konami_code_statem:event(FSM, CallId, Event, JObj);
+        [] -> lager:debug("no konami statem for ~s, dropping ~s", [CallId, Event])
+    end.
 
 -spec relay_to_pids(kz_term:ne_binary(), kz_json:object()) -> any().
 relay_to_pids(CallId, JObj) ->
@@ -316,6 +345,7 @@ originate(Req) ->
 %%------------------------------------------------------------------------------
 -spec init([]) -> {'ok', state()}.
 init([]) ->
+    _ = ets:new(?RECORDINGS, ['named_table', 'public', 'bag']),
     {'ok', #state{cleanup_ref=cleanup_timer()}}.
 
 cleanup_timer() ->
@@ -402,13 +432,25 @@ code_change(_OldVsn, State, _Extra) ->
 -spec cleanup_bindings(kz_types:server_ref()) -> 'ok'.
 cleanup_bindings(Srv) ->
     kz_util:put_callid(?MODULE),
-    cleanup_bindings(Srv, gen_listener:bindings(Srv)).
+    cleanup_bindings(Srv, gen_listener:bindings(Srv)),
+    prune_recordings().
 
 -spec cleanup_bindings(kz_types:server_ref(), gen_listener:bindings()) -> 'ok'.
 cleanup_bindings(_Srv, []) -> 'ok';
 cleanup_bindings(Srv, [{Binding, Props}|Bindings]) ->
     maybe_remove_binding(Srv, Binding, Props, props:get_value('callid', Props)),
     cleanup_bindings(Srv, Bindings).
+
+%% A leg nothing listens to anymore can't see its RECORD_STOP, so its rows would read as recording.
+-spec prune_recordings() -> 'ok'.
+prune_recordings() ->
+    CallIds = lists:usort([CallId || {CallId, _Path} <- ets:tab2list(?RECORDINGS)]),
+    lists:foreach(fun(CallId) -> ets:delete(?RECORDINGS, CallId) end
+                 ,[CallId || CallId <- CallIds
+                                 ,fsms_for_callid(CallId) =:= []
+                                 ,pids_for_callid(CallId) =:= []
+                  ]
+                 ).
 
 -spec maybe_remove_binding(kz_types:server_ref(), atom(), kz_term:proplist(), kz_term:api_binary()) -> 'ok'.
 maybe_remove_binding(_Srv, _Binding, _Props, 'undefined') -> 'ok';
