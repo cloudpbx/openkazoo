@@ -273,6 +273,13 @@ handle_cast('channel_destroyed', #state{is_recording='true'
     lager:info("channel was destroyed, waiting on RECORD_STOP or shutting down"),
     maybe_stop_timer(TRef),
     {'noreply', State#state{timer_ref=start_recording_stop_timer()}};
+handle_cast('channel_destroyed', #state{is_recording='false'
+                                       ,store_attempted='false'
+                                       ,timer_ref=TRef
+                                       }=State) ->
+    lager:info("channel was destroyed before recording started, waiting on RECORD_START or shutting down"),
+    maybe_stop_timer(TRef),
+    {'noreply', State#state{timer_ref=start_recording_stop_timer()}};
 handle_cast('channel_destroyed', State) ->
     lager:debug("ignoring channel destroyed while storing"),
     {'noreply', State};
