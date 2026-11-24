@@ -29,6 +29,10 @@
         ,patch/2
         ]).
 
+-ifdef(TEST).
+-export([maybe_deny_priv_level_change/3]).
+-endif.
+
 -include("crossbar.hrl").
 
 -define(MOD_CONFIG_CAT, <<(?CONFIG_CAT)/binary, ".users">>).
@@ -484,10 +488,12 @@ validate_request(UserId, Context0) ->
             %% NOTE: We need to load the current (unmodified) user document
             %% into the cb_context KVS db_doc because billing uses that to
             %% determine what changed and charge accordingly
-            cb_context:update_successfully_validated_request(load_user(UserId, Context), UserJObj);
+            maybe_deny_priv_level_change(UserId, UserJObj
+                                        ,cb_context:update_successfully_validated_request(load_user(UserId, Context), UserJObj));
         {'true', UserJObj} ->
             lager:debug("successfull validated user object create"),
-            cb_context:update_successfully_validated_request(Context, UserJObj);
+            maybe_deny_priv_level_change('undefined', UserJObj
+                                        ,cb_context:update_successfully_validated_request(Context, UserJObj));
         {'validation_errors', ValidationErrors} ->
             lager:info("validation errors on user"),
             cb_context:add_doc_validation_errors(Context, ValidationErrors);
@@ -497,6 +503,51 @@ validate_request(UserId, Context0) ->
         {'system_error', {Error, Message}} ->
             lager:info("system error validating user: ~p, ~p", [Error, Message]),
             cb_context:add_system_error(Error, Message, Context)
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Only an account (or super-duper) admin may set or change a user's
+%% priv_level. A non-admin request that would change priv_level (e.g. a user
+%% PATCHing themselves to `admin') is denied, so a non-admin cannot self-elevate
+%% to admin privileges.
+%% @end
+%%------------------------------------------------------------------------------
+-spec maybe_deny_priv_level_change(kz_term:api_ne_binary(), kzd_users:doc(), cb_context:context()) ->
+          cb_context:context().
+maybe_deny_priv_level_change(UserId, ValidatedDoc, Context) ->
+    case cb_context:has_errors(Context) of
+        'true' -> Context;
+        'false' -> deny_priv_level_change(UserId, ValidatedDoc, Context)
+    end.
+
+-spec deny_priv_level_change(kz_term:api_ne_binary(), kzd_users:doc(), cb_context:context()) ->
+          cb_context:context().
+deny_priv_level_change(UserId, ValidatedDoc, Context) ->
+    Requested = kzd_users:priv_level(ValidatedDoc),
+    Current = current_priv_level(UserId, Context),
+    case Requested =:= Current
+        orelse is_admin_requestor(Context)
+    of
+        'true' -> Context;
+        'false' ->
+            lager:info("denying priv_level change '~s' -> '~s' by non-admin user", [Current, Requested]),
+            Msg = kz_json:from_list([{<<"message">>, <<"Only administrators may change priv_level">>}
+                                    ,{<<"cause">>, <<"priv_level">>}
+                                    ]),
+            cb_context:add_system_error('forbidden', Msg, Context)
+    end.
+
+-spec is_admin_requestor(cb_context:context()) -> boolean().
+is_admin_requestor(Context) ->
+    cb_context:is_superduper_admin(Context)
+        orelse cb_context:is_account_admin(Context).
+
+-spec current_priv_level(kz_term:api_ne_binary(), cb_context:context()) -> kz_term:ne_binary().
+current_priv_level('undefined', _Context) -> <<"user">>;
+current_priv_level(UserId, Context) ->
+    case kz_datamgr:open_cache_doc(cb_context:account_db(Context), UserId) of
+        {'ok', Orig} -> kzd_users:priv_level(Orig);
+        _ -> <<"user">>
     end.
 
 %%------------------------------------------------------------------------------
