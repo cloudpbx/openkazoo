@@ -811,7 +811,7 @@ sanitize_parameters(Query, SecretKey) ->
     sanitize_parameters(SplitParams, SecretKey).
 
 -spec sanitize_parameters(kz_term:binaries(), kz_term:ne_binary(), kz_term:binaries()) -> binary().
-sanitize_parameters([], _SecretKey, Acc) when is_list(Acc) -> kz_binary:join(Acc, "&"))>>);
+sanitize_parameters([], _SecretKey, Acc) when is_list(Acc) -> kz_binary:join(Acc, <<"&">>);
 sanitize_parameters([Param|Rest], SecretKey, Acc) ->
     Sanitized = sanitize_parameter(Param, SecretKey),
     sanitize_parameters(Rest, SecretKey, Acc ++ [Sanitized]).
