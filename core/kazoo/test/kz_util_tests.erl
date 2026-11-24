@@ -261,3 +261,17 @@ put_interaction_id_test_() ->
      ,?_assertEqual(<<"63959390461-7ff3e916">>, props:get_value('interaction_id', lager:md()))
      ]
     }.
+
+%% An AMQP broker URI with a query string (e.g. "?heartbeat=10") is the one
+%% shape that walks every branch of sanitize_uri/1's secret-param fold.
+sanitize_uri_test_() ->
+    [?_assertEqual(<<"amqp://****:****@host:5672/vhost">>
+                  ,kz_util:sanitize_uri(<<"amqp://user:pass@host:5672/vhost">>)
+                  )
+    ,?_assertEqual(<<"amqp://host:5672?heartbeat=10">>
+                  ,kz_util:sanitize_uri(<<"amqp://host:5672?heartbeat=10">>)
+                  )
+    ,?_assertEqual(<<"amqp://****:****@host:5672?heartbeat=10">>
+                  ,kz_util:sanitize_uri(<<"amqp://user:pass@host:5672?heartbeat=10">>)
+                  )
+    ].

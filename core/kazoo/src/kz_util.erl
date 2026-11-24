@@ -811,15 +811,13 @@ sanitize_parameters(Query, SecretKey) ->
     sanitize_parameters(SplitParams, SecretKey).
 
 -spec sanitize_parameters(kz_term:binaries(), kz_term:ne_binary(), kz_term:binaries()) -> binary().
-sanitize_parameters([], _SecretKey, Acc) when is_list(Acc) -> kz_binary:join(Acc, <<"&">>);
+sanitize_parameters([], _SecretKey, Acc) when is_list(Acc) -> kz_binary:join(Acc, "&"))>>);
 sanitize_parameters([Param|Rest], SecretKey, Acc) ->
-    io:format("~nsanitize_parameters with Param: ~p Rest: ~p SecretKey: ~p, Acc: ~p~n", [Param, Rest, SecretKey, Acc]),
     Sanitized = sanitize_parameter(Param, SecretKey),
     sanitize_parameters(Rest, SecretKey, Acc ++ [Sanitized]).
 
 -spec sanitize_parameter(binary(), kz_term:ne_binary()) -> binary().
 sanitize_parameter(Param, SecretKey) -> %% (<<"token=SeCreT">>, <<"token">>)
-    io:format("~nsanitize_parameter with ~p ~p~n", [Param, SecretKey]),
     case binary:split(Param, <<SecretKey/binary, "=">>) of
         [<<>>, <<>>] -> Param; %% empty parameter, return as-is
         [<<>>, _Value] -> <<SecretKey/binary, "=****">>; %% match! [<<>>, <<"SeCreT">>] -> <<"token=****">>
