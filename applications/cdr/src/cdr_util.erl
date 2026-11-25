@@ -62,17 +62,10 @@ do_save_cdr(AccountMODb, Doc) ->
 register_views() ->
     kz_datamgr:register_views_from_folder('cdr').
 
--spec check_media_names(list()|kz_term:api_binary()| 'undefined') -> list() | 'undefined'.
-check_media_names([HeadMN | TailMN]) ->
-    re:split(HeadMN, ",") ++ check_last_media_name(TailMN);
+-spec check_media_names(list() | kz_term:api_binary()) -> list() | 'undefined'.
 check_media_names('undefined') ->
     'undefined';
+check_media_names(MediaNames) when is_list(MediaNames) ->
+    lists:append([re:split(MediaName, ",") || MediaName <- MediaNames]);
 check_media_names(MediaNames) ->
     re:split(MediaNames, ",").
-
-
--spec check_last_media_name(list())->list().
-check_last_media_name([FirstMediaName])->
-    re:split(FirstMediaName, ",");
-check_last_media_name([FirstMediaName | LasttMediaName])->
-    re:split(FirstMediaName, ",") ++ check_media_names(re:split(LasttMediaName, ",")).

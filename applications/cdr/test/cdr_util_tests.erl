@@ -30,4 +30,7 @@ check_media_names_test()->
     ?assertMatch([A], cdr_util:check_media_names(A)),
     ?assertMatch([B], cdr_util:check_media_names(B)),
     ?assertMatch(D,cdr_util:check_media_names(C)),
-    ?assertMatch(F,cdr_util:check_media_names(E)).
+    ?assertMatch(F,cdr_util:check_media_names(E)),
+    ?assertMatch([A], cdr_util:check_media_names([A])),
+    ?assertMatch([B, B, A], cdr_util:check_media_names([B, B, A])),
+    ?assertMatch([B, A, B, A], cdr_util:check_media_names([B, <<A/binary, ",", B/binary>>, A])).
