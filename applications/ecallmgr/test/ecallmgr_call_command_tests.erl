@@ -57,3 +57,12 @@ tones_test() ->
                  }
                 ,ecallmgr_call_command:tones_app(Tones)
                 ).
+
+-spec stop_record_call_test_() -> any().
+stop_record_call_test_() ->
+    Stop = fun(Props) ->
+                   ecallmgr_call_command:record_call('node', <<"uuid">>, <<"stop">>, kz_json:from_list(Props))
+           end,
+    [?_assertEqual({<<"stop_record_session">>, <<"all">>}, Stop([{<<"Media-Name">>, <<"all">>}]))
+    ,?_assertEqual({<<"stop_record_session">>, <<"${media_recordings[0]}">>}, Stop([]))
+    ].

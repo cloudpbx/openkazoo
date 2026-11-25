@@ -12,6 +12,7 @@
 
 -ifdef(TEST).
 -export([get_conference_flags/1
+        ,record_call/4
         ,tones_app/1
         ]).
 -endif.
@@ -1528,6 +1529,7 @@ record_call(Node, UUID, <<"start">>, JObj) ->
 record_call(_Node, _UUID, <<"stop">>, JObj) ->
     RecordingName = case kz_json:get_ne_binary_value(<<"Media-Name">>, JObj) of
                         'undefined' -> <<"${media_recordings[0]}">>;
+                        <<"all">> -> <<"all">>;
                         MediaName -> ecallmgr_util:recording_filename(MediaName)
                     end,
     {<<"stop_record_session">>, RecordingName}.
