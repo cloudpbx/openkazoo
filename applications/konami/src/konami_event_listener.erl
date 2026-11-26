@@ -9,6 +9,7 @@
 -export([start_link/0
         ,add_call_binding/1, add_call_binding/2
         ,rm_call_binding/1, rm_call_binding/2
+        ,watch_recordings_only/1
         ,add_konami_binding/1, rm_konami_binding/1
         ,handle_call_event/2
         ,handle_originate_event/2
@@ -190,6 +191,15 @@ rm_call_binding(CallId, Events) ->
         'true' -> 'ok';
         'false' -> really_remove_call_bindings(CallId, Events)
     end.
+
+%% Drops everything but the recording events on the leg, still knowing what it's recording.
+-spec watch_recordings_only(kz_term:ne_binary()) -> 'ok'.
+watch_recordings_only(CallId) ->
+    Running = ets:lookup(?RECORDINGS, CallId),
+    rm_call_binding(CallId),
+    add_call_binding(CallId, ?RECORDING_EVENTS),
+    'true' = ets:insert(?RECORDINGS, Running),
+    'ok'.
 
 -spec call_has_listeners(kz_term:ne_binary()) -> boolean().
 call_has_listeners(CallId) ->
