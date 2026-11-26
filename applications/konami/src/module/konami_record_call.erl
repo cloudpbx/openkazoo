@@ -6,6 +6,8 @@
 %%%   ,"time_limit":600 // in seconds, how long to record the call
 %%%   ,"format":["mp3","wav"] // what format to store the recording in
 %%%   ,"url":"http://server.com/path/to/dump/file" // what URL to PUT the file to
+%%%   ,"on_demand":true // only announce and mark the press; Kazoo's recording is left alone
+%%%   ,"mark":true // start or stop as usual, and also mark the press
 %%% }
 %%%
 %%% @author James Aimonetti
@@ -43,7 +45,10 @@ handle(_Data, Call, <<"unmask">>) ->
 handle(Data, Call, Action) when Action =:= <<"start">>; Action =:= <<"stop">> ->
     case kz_json:is_true(<<"on_demand">>, Data) of
         'true' -> on_demand(Data, Call, Action);
-        'false' -> handle_recording(Data, Call, Action)
+        'false' ->
+            _ = kz_json:is_true(<<"mark">>, Data)
+                andalso mark_press(press_leg(Data, Call), Action, Call),
+            handle_recording(Data, Call, Action)
     end.
 
 %% For a person who doesn't record by default, at a firm that records every call: Kazoo is already
@@ -52,11 +57,15 @@ handle(Data, Call, Action) when Action =:= <<"start">>; Action =:= <<"stop">> ->
 %% lies between their starts and stops.
 -spec on_demand(kz_json:object(), kapps_call:call(), kz_term:ne_binary()) -> kapps_call:call().
 on_demand(Data, Call, Action) ->
-    Leg = kz_json:get_ne_binary_value(<<"dtmf_leg">>, Data, kapps_call:call_id_direct(Call)),
+    Leg = press_leg(Data, Call),
     lager:debug("on-demand ~s on ~s", [Action, Leg]),
     mark_press(Leg, Action, Call),
     announce(<<"recording-", Action/binary>>, Call),
     Call.
+
+-spec press_leg(kz_json:object(), kapps_call:call()) -> kz_term:ne_binary().
+press_leg(Data, Call) ->
+    kz_json:get_ne_binary_value(<<"dtmf_leg">>, Data, kapps_call:call_id_direct(Call)).
 
 -spec mark_press(kz_term:ne_binary(), kz_term:ne_binary(), kapps_call:call()) -> 'ok'.
 mark_press(Leg, Action, Call) ->
