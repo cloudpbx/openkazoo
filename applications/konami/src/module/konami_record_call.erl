@@ -22,6 +22,9 @@
 %% FreeSWITCH stops every recording on the leg when the stop names this instead of a file.
 -define(STOP_ALL, <<"all">>).
 -define(STOP_WAIT_MS, 2 * ?MILLISECONDS_IN_SECOND).
+%% Each on-demand press is a channel variable of its own (Record-On-Demand-<ms> = start | stop), so
+%% the leg's CDR lists every press and none has to be read back to append another.
+-define(ON_DEMAND_PREFIX, <<"Record-On-Demand-">>).
 
 -spec handle(kz_json:object(), kapps_call:call()) ->
           {'continue', kapps_call:call()}.
@@ -37,7 +40,31 @@ handle(_Data, Call, <<"mask">>) ->
 handle(_Data, Call, <<"unmask">>) ->
     lager:debug("unmasking recording, see you on the other side"),
     kapps_call:unmask_recording(Call);
-handle(Data, Call, <<"start">>) ->
+handle(Data, Call, Action) when Action =:= <<"start">>; Action =:= <<"stop">> ->
+    case kz_json:is_true(<<"on_demand">>, Data) of
+        'true' -> on_demand(Data, Call, Action);
+        'false' -> handle_recording(Data, Call, Action)
+    end.
+
+%% For a person who doesn't record by default, at a firm that records every call: Kazoo is already
+%% recording, so nothing is started or stopped (a colleague's recording on the other leg keeps
+%% running). The press is announced and marked on the person's own leg; processing keeps only what
+%% lies between their starts and stops.
+-spec on_demand(kz_json:object(), kapps_call:call(), kz_term:ne_binary()) -> kapps_call:call().
+on_demand(Data, Call, Action) ->
+    Leg = kz_json:get_ne_binary_value(<<"dtmf_leg">>, Data, kapps_call:call_id_direct(Call)),
+    lager:debug("on-demand ~s on ~s", [Action, Leg]),
+    mark_press(Leg, Action, Call),
+    announce(<<"recording-", Action/binary>>, Call),
+    Call.
+
+-spec mark_press(kz_term:ne_binary(), kz_term:ne_binary(), kapps_call:call()) -> 'ok'.
+mark_press(Leg, Action, Call) ->
+    Key = <<?ON_DEMAND_PREFIX/binary, (kz_term:to_binary(erlang:system_time('millisecond')))/binary>>,
+    kapps_call_command:set(kz_json:from_list([{Key, Action}]), 'undefined', kapps_call:set_call_id(Leg, Call)).
+
+-spec handle_recording(kz_json:object(), kapps_call:call(), kz_term:ne_binary()) -> kapps_call:call().
+handle_recording(Data, Call, <<"start">>) ->
     case running(Call) =:= [] andalso live_recorders(Call) =:= [] of
         'false' ->
             lager:debug("already recording, ignoring start"),
@@ -47,7 +74,7 @@ handle(Data, Call, <<"start">>) ->
             announce(<<"recording-start">>, Call),
             kapps_call:start_recording(Data, track(Call, []))
     end;
-handle(_Data, Call, <<"stop">>) ->
+handle_recording(_Data, Call, <<"stop">>) ->
     Legs = legs(Call),
     Known = running(Call) =/= [] orelse live_recorders(Call) =/= [],
     _ = Known orelse listen_for_stops(Legs),
