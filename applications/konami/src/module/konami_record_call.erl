@@ -21,6 +21,7 @@
 
 %% FreeSWITCH stops every recording on the leg when the stop names this instead of a file.
 -define(STOP_ALL, <<"all">>).
+-define(STOP_WAIT_MS, 2 * ?MILLISECONDS_IN_SECOND).
 %% Each on-demand press is a channel variable of its own (Record-On-Demand-<ms> = start | stop), so
 %% the leg's CDR lists every press and none has to be read back to append another.
 -define(ON_DEMAND_PREFIX, <<"Record-On-Demand-">>).
@@ -74,11 +75,51 @@ handle_recording(Data, Call, <<"start">>) ->
             kapps_call:start_recording(Data, track(Call, []))
     end;
 handle_recording(_Data, Call, <<"stop">>) ->
-    stop_all([kapps_call:call_id_direct(Call), kapps_call:other_leg_call_id(Call)], Call),
+    Legs = legs(Call),
+    Known = running(Call) =/= [] orelse live_recorders(Call) =/= [],
+    _ = Known orelse listen_for_stops(Legs),
+    stop_all(Legs, Call),
     Call1 = track(Call, []),
-    lager:debug("sent command to stop recording call"),
-    announce(<<"recording-stop">>, Call1),
+    case Known orelse stopped_any(Legs) of
+        'true' ->
+            lager:debug("sent command to stop recording call"),
+            announce(<<"recording-stop">>, Call1);
+        'false' ->
+            lager:debug("nothing was recording, stopping without an announcement")
+    end,
     Call1.
+
+-spec legs(kapps_call:call()) -> kz_term:ne_binaries().
+legs(Call) ->
+    lists:usort([CallId || CallId <- [kapps_call:call_id_direct(Call), kapps_call:other_leg_call_id(Call)]
+                               ,is_binary(CallId)
+                ]).
+
+%% konami may not have seen a recording (one that started before it bound to the leg), so whether
+%% the stop ended anything is read from the legs' RECORD_STOP events.
+-spec listen_for_stops(kz_term:ne_binaries()) -> 'ok'.
+listen_for_stops(Legs) ->
+    lists:foreach(fun(CallId) -> konami_event_listener:add_call_binding(CallId, [<<"RECORD_STOP">>]) end, Legs).
+
+-spec stopped_any(kz_term:ne_binaries()) -> boolean().
+stopped_any(Legs) ->
+    Stopped = wait_for_stop(Legs, ?STOP_WAIT_MS),
+    lists:foreach(fun(CallId) -> konami_event_listener:rm_call_binding(CallId, [<<"RECORD_STOP">>]) end, Legs),
+    Stopped.
+
+-spec wait_for_stop(kz_term:ne_binaries(), timeout()) -> boolean().
+wait_for_stop(Legs, Timeout) ->
+    Start = os:timestamp(),
+    case kapps_call_command:receive_event(Timeout) of
+        {'ok', JObj} ->
+            case kz_call_event:event_name(JObj) =:= <<"RECORD_STOP">>
+                andalso lists:member(kz_call_event:call_id(JObj), Legs)
+            of
+                'true' -> 'true';
+                'false' -> wait_for_stop(Legs, kz_time:decr_timeout(Timeout, Start))
+            end;
+        {'error', 'timeout'} -> 'false'
+    end.
 
 %% Every recording running on the call's legs, whoever started it (the account's or the endpoint's
 %% auto-recording, or konami): a firm's settings record each leg, so one stop has to end them all.
@@ -89,7 +130,7 @@ running(Call) ->
 %% By leg, not by name: an auto-recording can start before konami binds to that leg (on an inbound
 %% call it starts on answer, as the leg is bridged), so konami may never have seen it. Each recording
 %% stopped this way is still stored.
--spec stop_all(kz_term:api_binaries(), kapps_call:call()) -> 'ok'.
+-spec stop_all(kz_term:ne_binaries(), kapps_call:call()) -> 'ok'.
 stop_all(CallIds, Call) ->
     lists:foreach(fun(CallId) ->
                           lager:debug("stopping every recording on ~s", [CallId]),
@@ -97,7 +138,7 @@ stop_all(CallIds, Call) ->
                                                              ,kapps_call:set_call_id(CallId, Call)
                                                              )
                   end
-                 ,lists:usort([CallId || CallId <- CallIds, is_binary(CallId)])
+                 ,CallIds
                  ).
 
 %% A recorder exits once its recording is stored, whoever stopped it: konami, its time
