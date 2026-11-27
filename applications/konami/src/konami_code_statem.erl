@@ -33,6 +33,9 @@
 
 -type listen_on() :: 'a' | 'b' | 'ab'.
 
+%% The automatic recording starts as the call is answered; one starting later is someone's `*7`.
+-define(ANNOUNCE_ON_ANSWER_WINDOW_MS, 10 * ?MILLISECONDS_IN_SECOND).
+
 -record(state, {numbers :: kz_term:api_object()
                ,patterns :: kz_term:api_object()
                ,binding_digit = konami_config:binding_digit() :: kz_term:ne_binary()
@@ -55,6 +58,10 @@
                ,started_at = erlang:monotonic_time() :: integer()
                ,metaflows = [] :: [pid()]
                ,successor :: pid() | 'undefined'
+
+               ,announce_on_answer = 'false' :: boolean()
+               ,answered_at :: integer() | 'undefined'
+               ,announced = 'false' :: boolean()
                }).
 -type recording_ref() :: {kz_term:ne_binary(), pid()}.
 -type state() :: #state{}.
@@ -148,9 +155,30 @@ init({Call, JObj}) ->
                             ,call_id=kapps_call:call_id_direct(Call)
 
                             ,b_endpoint_id=BEndpointId
+                            ,announce_on_answer=kz_json:is_true(<<"Announce-On-Answer">>, JObj)
                             }
     ,[{'next_event', 'internal', 'take_over'}]
     }.
+
+%% A phone that can't play the recording notice itself (a deskphone) has `announce_on_answer` in its
+%% metaflows: when the call's automatic recording starts as it's answered, the notice plays to both
+%% people, once. A recording that starts later is someone's `*7`, which announces itself.
+-spec maybe_announce_auto_recording(state()) -> state().
+maybe_announce_auto_recording(#state{answered_at=AnsweredAt, call=Call}=State) ->
+    case AnsweredAt =:= 'undefined'
+        orelse erlang:monotonic_time('millisecond') - AnsweredAt =< ?ANNOUNCE_ON_ANSWER_WINDOW_MS
+    of
+        'true' ->
+            lager:debug("automatic recording started as the call was answered, announcing it"),
+            konami_record_call:announce(<<"recording-start">>, Call);
+        'false' ->
+            lager:debug("first recording started after the call was answered, not announcing it")
+    end,
+    State#state{announced='true'}.
+
+-spec first_defined(integer() | 'undefined', integer()) -> integer().
+first_defined('undefined', Value) -> Value;
+first_defined(Value, _) -> Value.
 
 -spec callback_mode() -> 'state_functions'.
 callback_mode() ->
@@ -262,9 +290,15 @@ handle_event({'hand_over', Newer, ControlQueue, StartedAt, CallId, ListenOn}, _S
     maybe_hand_over(Newer, ControlQueue, StartedAt, CallId, ListenOn, State);
 handle_event(?EVENT(_CallId, <<"CHANNEL_ANSWER">>, Evt)
             ,StateName
-            ,State
+            ,#state{answered_at=AnsweredAt}=State
             ) ->
-    {'next_state', StateName, handle_channel_answer(State, kz_call_event:call_id(Evt), Evt)};
+    State1 = State#state{answered_at=first_defined(AnsweredAt, erlang:monotonic_time('millisecond'))},
+    {'next_state', StateName, handle_channel_answer(State1, kz_call_event:call_id(Evt), Evt)};
+handle_event(?EVENT(_CallId, <<"RECORD_START">>, _Evt)
+            ,StateName
+            ,#state{announce_on_answer='true', announced='false'}=State
+            ) ->
+    {'next_state', StateName, maybe_announce_auto_recording(State)};
 handle_event(?EVENT(CallId, <<"CHANNEL_BRIDGE">>, Evt)
             ,StateName
             ,#state{call_id=CallId}=State
