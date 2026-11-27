@@ -6,6 +6,8 @@
 %%%   ,"time_limit":600 // in seconds, how long to record the call
 %%%   ,"format":["mp3","wav"] // what format to store the recording in
 %%%   ,"url":"http://server.com/path/to/dump/file" // what URL to PUT the file to
+%%%   ,"on_demand":true // announce and mark the press; Kazoo's recording is left alone, unless nothing is recording on a start
+%%%   ,"mark":true // start or stop as usual, and also mark the press
 %%% }
 %%%
 %%% @author James Aimonetti
@@ -43,29 +45,46 @@ handle(_Data, Call, <<"unmask">>) ->
 handle(Data, Call, Action) when Action =:= <<"start">>; Action =:= <<"stop">> ->
     case kz_json:is_true(<<"on_demand">>, Data) of
         'true' -> on_demand(Data, Call, Action);
-        'false' -> handle_recording(Data, Call, Action)
+        'false' ->
+            _ = kz_json:is_true(<<"mark">>, Data)
+                andalso mark_press(press_leg(Data, Call), Action, Call),
+            handle_recording(Data, Call, Action)
     end.
 
 %% For a person who doesn't record by default, at a firm that records every call: Kazoo is already
-%% recording, so nothing is started or stopped (a colleague's recording on the other leg keeps
-%% running). The press is announced and marked on the person's own leg; processing keeps only what
-%% lies between their starts and stops.
+%% recording, so nothing is stopped (a colleague's recording on the other leg keeps running). The
+%% press is announced and marked on the person's own leg; processing keeps only what lies between
+%% their starts and stops. A start on a call nothing records (a phone that doesn't auto-record)
+%% starts a recording too.
 -spec on_demand(kz_json:object(), kapps_call:call(), kz_term:ne_binary()) -> kapps_call:call().
 on_demand(Data, Call, Action) ->
-    Leg = kz_json:get_ne_binary_value(<<"dtmf_leg">>, Data, kapps_call:call_id_direct(Call)),
+    Leg = press_leg(Data, Call),
     lager:debug("on-demand ~s on ~s", [Action, Leg]),
     mark_press(Leg, Action, Call),
-    announce(<<"recording-", Action/binary>>, Call),
-    Call.
+    case Action =:= <<"start">> andalso not_recording(Call) of
+        'true' ->
+            handle_recording(Data, Call, Action);
+        'false' ->
+            announce(<<"recording-", Action/binary>>, Call),
+            Call
+    end.
+
+-spec press_leg(kz_json:object(), kapps_call:call()) -> kz_term:ne_binary().
+press_leg(Data, Call) ->
+    kz_json:get_ne_binary_value(<<"dtmf_leg">>, Data, kapps_call:call_id_direct(Call)).
 
 -spec mark_press(kz_term:ne_binary(), kz_term:ne_binary(), kapps_call:call()) -> 'ok'.
 mark_press(Leg, Action, Call) ->
     Key = <<?ON_DEMAND_PREFIX/binary, (kz_term:to_binary(erlang:system_time('millisecond')))/binary>>,
     kapps_call_command:set(kz_json:from_list([{Key, Action}]), 'undefined', kapps_call:set_call_id(Leg, Call)).
 
+-spec not_recording(kapps_call:call()) -> boolean().
+not_recording(Call) ->
+    running(Call) =:= [] andalso live_recorders(Call) =:= [].
+
 -spec handle_recording(kz_json:object(), kapps_call:call(), kz_term:ne_binary()) -> kapps_call:call().
 handle_recording(Data, Call, <<"start">>) ->
-    case running(Call) =:= [] andalso live_recorders(Call) =:= [] of
+    case not_recording(Call) of
         'false' ->
             lager:debug("already recording, ignoring start"),
             Call;

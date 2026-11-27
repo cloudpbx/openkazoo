@@ -315,6 +315,7 @@ terminate(_Reason, _StateName, #state{call_id=CallId
     konami_event_listener:rm_call_binding(CallId),
     konami_event_listener:rm_call_binding(OtherLeg),
     konami_event_listener:rm_call_binding(OtherLeg, ?RECORDING_EVENTS),
+    konami_event_listener:rm_call_binding(CallId, ?RECORDING_EVENTS),
     konami_event_listener:rm_konami_binding(CallId),
     konami_event_listener:rm_konami_binding(OtherLeg),
     ?WSD_STOP(),
@@ -430,9 +431,11 @@ is_a_leg(Call, <<_/binary>> = EndpointId) ->
 is_a_leg(Call, JObj) ->
     is_a_leg(Call, kz_json:get_value(<<"Endpoint-ID">>, JObj)).
 
+%% With the recording events, konami knows when this leg is already recorded.
 -define(B_LEG_EVENTS, [<<"DTMF">>, <<"CHANNEL_ANSWER">>
                       ,<<"CHANNEL_BRIDGE">>, <<"CHANNEL_TRANSFEREE">>
                       ,<<"CHANNEL_REPLACED">>
+                      ,<<"RECORD_START">>, <<"RECORD_STOP">>
                       ]).
 
 -spec listen_on(kapps_call:call(), kz_json:object()) -> 'a' | 'b' | 'ab'.
@@ -733,7 +736,7 @@ handle_channel_bridge(#state{call_id=CallId
                             ,listen_on='b'
                             }=State, CallId, _OtherLeg) ->
     lager:debug("joy, 'b' is bridged to ~s. Removing binding to a-leg", [CallId]),
-    konami_event_listener:rm_call_binding(CallId),
+    konami_event_listener:watch_recordings_only(CallId),
     konami_event_listener:rm_konami_binding(CallId),
     State;
 handle_channel_bridge(#state{call_id=CallId
