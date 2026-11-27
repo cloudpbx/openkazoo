@@ -1,0 +1,27 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "system_config.crossbar.owner_authz",
+    "description": "Schema for crossbar.owner_authz system_config",
+    "properties": {
+        "general_endpoint_mode": {
+            "default": "filter",
+            "description": "Behavior when an owner-restricted user requests a general/collection endpoint: 'filter' transparently scopes results to records they own, 'reject' returns 403",
+            "enum": [
+                "filter",
+                "reject"
+            ],
+            "type": "string"
+        },
+        "should_restrict_access_to_owner": {
+            "default": false,
+            "description": "Restrict non-admin users to records they own (devices, CDRs); admins are unaffected",
+            "type": "boolean"
+        },
+        "should_restrict_access_to_unowned": {
+            "default": true,
+            "description": "Hide records with no owner_id from owner-restricted users (fail-closed default). Set false to allow restricted users to access ownerless/shared records.",
+            "type": "boolean"
+        }
+    },
+    "type": "object"
+}
