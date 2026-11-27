@@ -14,6 +14,7 @@
 -module(konami_record_call).
 
 -export([handle/2
+        ,announce/2
         ,number_builder/1
         ]).
 

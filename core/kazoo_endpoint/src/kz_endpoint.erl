@@ -929,6 +929,7 @@ maybe_start_metaflow(Call, Endpoint) ->
                     ,{<<"Binding-Digit">>, kzd_metaflows:binding_digit(Metaflow)}
                     ,{<<"Digit-Timeout">>, kzd_metaflows:digit_timeout(Metaflow)}
                     ,{<<"Listen-On">>, kzd_metaflows:listen_on(Metaflow, <<"self">>)}
+                    ,{<<"Announce-On-Answer">>, kz_json:is_true(<<"announce_on_answer">>, Metaflow) orelse 'undefined'}
                      | kz_api:default_headers(?APP_NAME, ?APP_VERSION)
                     ]),
             lager:debug("sending metaflow for endpoint: ~s: ~s"

@@ -89,6 +89,7 @@
 -define(OPTIONAL_METAFLOW_BIND_HEADERS, [<<"Numbers">>, <<"Patterns">>
                                         ,<<"Binding-Digit">>, <<"Digit-Timeout">>
                                         ,<<"Endpoint-ID">>, <<"Listen-On">>
+                                        ,<<"Announce-On-Answer">>
                                         ]).
 -define(METAFLOW_BIND_VALUES, [{<<"Event-Category">>, <<"metaflow">>}
                               ,{<<"Event-Name">>, <<"bind">>}
@@ -96,6 +97,7 @@
                               ,{<<"Listen-On">>, [<<"both">>, <<"self">>, <<"peer">>, <<"aleg">>, <<"bleg">>]}
                               ]).
 -define(METAFLOW_BIND_TYPES, [{<<"Numbers">>, fun kz_json:is_json_object/1}
+                             ,{<<"Announce-On-Answer">>, fun kz_term:is_boolean/1}
                              ,{<<"Patterns">>, fun kz_json:is_json_object/1}
                              ,{<<"Digit-Timeout">>, fun binding_digit_timeout_v/1}
                              ]).
